@@ -215,7 +215,7 @@ def test_platform_defaults_to_slack():
 
 def test_valid_platforms_enumerated():
     """VALID_PLATFORMS is the canonical set (kept in sync with subcommand groups)."""
-    assert VALID_PLATFORMS == ('slack', 'discord', 'bsky', 'capture')
+    assert VALID_PLATFORMS == ('slack', 'discord', 'bsky', 'mastodon', 'capture')
 
 
 def test_platform_roundtrips_through_save_load(tmp_path):

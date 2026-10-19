@@ -67,7 +67,7 @@ LEGACY_STATE_PATH = Path('thrds.json')
 DEFAULT_GIST_REMOTE = 'g'  # matches ghpr's convention
 CHANNEL_PREFIX_ENV = 'THRDS_CHANNEL_PREFIX'
 
-VALID_PLATFORMS = ('slack', 'discord', 'bsky', 'capture')
+VALID_PLATFORMS = ('slack', 'discord', 'bsky', 'mastodon', 'capture')
 DEFAULT_PLATFORM = 'slack'
 
 # A thread's lifecycle. `draft` → not ready; `ready` → armed for push (set by

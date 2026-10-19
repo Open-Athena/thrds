@@ -3269,6 +3269,111 @@ def bsky_open(no_open: bool):
         webbrowser.open(url)
 
 
+# ---------------------------------------------------------------------------
+# `thrds mastodon` — init + render + lint + open, same phase-1 shape as `bsky`.
+#
+# Mastodon's draft-time constraints mirror bsky's (no markdown parsing → masked
+# links render literal, bare URLs auto-link; a per-paragraph length limit,
+# default 500 chars). Unlike bsky, Mastodon has a real edit API, so a live
+# `push` is coherent here later — but the immediately useful, account-free
+# increment is the same render-for-paste + lint + gist-mirrored trajectory.
+# The `MastodonClient` in `thrds.mastodon` (Python API) already implements the
+# full `ThreadClient` (with a real `edit()`) for those scripting directly.
+
+
+def _run_mastodon_lint(doc_text: str, doc_path: str) -> int:
+    """Shared lint runner for `mastodon lint` and `mastodon render`.
+
+    Prints the report to stderr; returns the number of issues found.
+    """
+    from .lint import MastodonLinter
+    report = MastodonLinter().lint(doc_text)
+    if report.has_issues:
+        err(report.format(path=doc_path))
+    return len(report.issues)
+
+
+@cli.group("mastodon")
+def mastodon_cli():
+    """Mastodon workflow: init, render (for paste), lint (post-length + link check).
+
+    Same phase-1 shape as `discord` / `bsky` — no `push` verb yet, though
+    `thrds.mastodon.MastodonClient` (a full `ThreadClient` with a real edit
+    API) is importable for scripting posts directly.
+    """
+    pass
+
+
+@mastodon_cli.command("init")
+@click.option('-G', '--no-gist', is_flag=True, help='Skip gist creation; local git repo only.')
+@click.argument('doc_path')
+def mastodon_init(no_gist: bool, doc_path: str):
+    """Initialize a `thrds mastodon` session for DOC_PATH.
+
+    Same on-disk shape as the other platform inits — session dir under
+    ``<git-root-or-cwd>/mastodon/<slug>/``, optionally gist-mirrored. No live
+    API plumbing (that lives in `MastodonClient` for scripting).
+    """
+    target, state, was_resume = _do_init(doc_path, no_gist, channel_prefix=None, platform='mastodon')
+    if was_resume:
+        return
+    hint = None if state.gist_id is None else f"Gist: https://gist.github.com/{state.gist_id}"
+    _print_init_completion(target, state, extra_hint=hint)
+
+
+@mastodon_cli.command("render")
+@click.option('-L', '--no-lint', is_flag=True, help='Skip the MD-compat lint pass (default: run it, warnings → stderr).')
+@click.argument('doc_path', required=False)
+def mastodon_render(no_lint: bool, doc_path: str | None):
+    """Print DOC_PATH to stdout for paste-into-Mastodon.
+
+    Idiomatic: ``thrds mastodon render | pbcopy``. By default runs the mastodon
+    lint first and prints warnings to stderr; pass ``-L`` to skip.
+    """
+    state = _load_state(expected_platform='mastodon')
+    path = _resolve_doc_path(state, doc_path)
+    text = Path(path).read_text()
+    if not no_lint:
+        _run_mastodon_lint(text, path)
+    click.echo(text, nl=False)
+
+
+@mastodon_cli.command("lint")
+@click.argument('doc_path', required=False)
+def mastodon_lint(doc_path: str | None):
+    """Run the Mastodon MD-compat lint on DOC_PATH; print warnings to stderr.
+
+    Exit code is 0 whether or not issues were found (warnings, not errors).
+    Rules:
+
+    \b
+    - paragraphs exceeding 500 chars (Mastodon's default post limit).
+    - masked links `[text](url)` render as literal text; use bare URLs
+      (Mastodon auto-links them).
+    """
+    state = _load_state(expected_platform='mastodon')
+    path = _resolve_doc_path(state, doc_path)
+    text = Path(path).read_text()
+    n = _run_mastodon_lint(text, path)
+    if n == 0:
+        err(f"{path}: no issues")
+
+
+@mastodon_cli.command("open")
+@click.option('-U', '--no-open', is_flag=True, help='Print the URL, do not launch browser.')
+def mastodon_open(no_open: bool):
+    """Open this session's gist in the browser (or print with -U)."""
+    state = _load_state(expected_platform='mastodon')
+    if state.gist_id is None:
+        raise click.UsageError(
+            'No gist recorded — session was init\'d with --no-gist.'
+        )
+    url = f'https://gist.github.com/{state.gist_id}'
+    err(f'Opening gist {state.gist_id}: {url}')
+    if not no_open:
+        webbrowser.open(url)
+
+
 def main():
     cli()
 

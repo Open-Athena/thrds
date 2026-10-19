@@ -29,6 +29,10 @@ Currently:
   - **masked links** — bsky renders them as literal text; bare URLs auto-link
     via facets. Same rule as Discord, different rule slug.
 
+- :class:`MastodonLinter` — same two rules as bsky (vanilla Mastodon doesn't
+  parse markdown either), with a **500-char** default limit
+  (``mastodon/post-too-long``) and ``mastodon/masked-link``.
+
 Extending to another platform: add a linter class here (each with a
 ``lint(text: str) -> LintReport`` method); the CLI's platform subgroup wires
 its verbs into it. See ``specs/done/discord-platform.md`` for the phase-2
@@ -277,5 +281,86 @@ class BskyLinter:
                 rule="bsky/post-too-long",
                 message=(
                     f"paragraph is {len(text)} chars; bsky post limit is {BSKY_POST_LIMIT}"
+                ),
+            ))
+
+
+# Mastodon's default post limit is 500 characters. Instances can raise it
+# (`configuration.statuses.max_characters`), so this is a lint-time baseline,
+# not a hard rule — a doc that trips it may still fit on a roomier instance.
+MASTODON_POST_LIMIT = 500
+
+
+class MastodonLinter:
+    """Flag markdown constructs / lengths that break on Mastodon.
+
+    Mastodon's constraints mirror Bluesky's — vanilla Mastodon does not parse
+    markdown, so it shares bsky's two failure modes with a longer limit:
+
+    - **500-char post limit** (per paragraph) — the default `max_characters`;
+      raise-able per instance, so this is a warning, not an error.
+    - **masked links** — ``[text](url)`` renders as literal text; bare URLs
+      auto-link. Same rule as bsky/Discord, different slug.
+
+    "Paragraph" is defined exactly as in :class:`BskyLinter`: blank-separated
+    blocks with thrds ``===``/``---`` separators stripped, joined by ``" "``.
+    """
+
+    def lint(self, text: str) -> LintReport:
+        report = LintReport()
+        in_fence = False
+        lines = text.split("\n")
+
+        # Masked links: same rule as bsky, different slug.
+        for i, line in enumerate(lines, start=1):
+            if _is_fence(line):
+                in_fence = not in_fence
+                continue
+            if in_fence:
+                continue
+            for m in _MASKED_LINK_RE.finditer(line):
+                report.append(LintIssue(
+                    line=i,
+                    column=m.start() + 1,
+                    severity="warning",
+                    rule="mastodon/masked-link",
+                    message=f"masked link {m.group()!r} renders as literal text on Mastodon; use a bare URL (auto-linked)",
+                ))
+
+        # Paragraph length: gather blank-separated blocks, joined by space.
+        para_start: int | None = None
+        para_lines: list[str] = []
+        for i, line in enumerate(lines, start=1):
+            if _is_fence(line) or _is_thrds_separator(line):
+                if para_start is not None:
+                    self._check_paragraph(report, para_start, para_lines)
+                    para_start, para_lines = None, []
+                continue
+            if not line.strip():
+                if para_start is not None:
+                    self._check_paragraph(report, para_start, para_lines)
+                    para_start, para_lines = None, []
+                continue
+            if para_start is None:
+                para_start = i
+            para_lines.append(line.strip())
+
+        if para_start is not None:
+            self._check_paragraph(report, para_start, para_lines)
+
+        return report
+
+    @staticmethod
+    def _check_paragraph(report: LintReport, start_line: int, lines: list[str]) -> None:
+        """Emit a `mastodon/post-too-long` warning if the joined paragraph exceeds the limit."""
+        text = " ".join(lines)
+        if len(text) > MASTODON_POST_LIMIT:
+            report.append(LintIssue(
+                line=start_line,
+                column=1,
+                severity="warning",
+                rule="mastodon/post-too-long",
+                message=(
+                    f"paragraph is {len(text)} chars; Mastodon default post limit is {MASTODON_POST_LIMIT}"
                 ),
             ))

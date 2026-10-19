@@ -2,7 +2,8 @@ from .core import Action, ActionType, EditRateLimited, Image, Message, Msg, Orph
 from .discord import NO_MENTIONS, DiscordClient, DiscordHybridClient, DiscordWebhookClient
 from .doc import Doc, DocMessage, DocSyncResult, DocThread, Frontmatter
 from .linked import LinkedSyncResult, LinkedThread, Section
-from .lint import BskyLinter, DiscordLinter, LintIssue, LintReport
+from .lint import BskyLinter, DiscordLinter, LintIssue, LintReport, MastodonLinter
+from .mastodon import MastodonClient
 from .protocol import ThreadClient
 from .slack import RecoveredSession, ScanCapReached, SlackClient
 from .state import SessionState, StagingChrome, ThreadEntry, ThreadTarget
@@ -28,6 +29,8 @@ __all__ = [
     "LinkedThread",
     "LintIssue",
     "LintReport",
+    "MastodonClient",
+    "MastodonLinter",
     "Message",
     "Msg",
     "OrphanedRepliesError",

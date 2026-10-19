@@ -1,7 +1,15 @@
 """Tests for the per-platform MD-compat linters (`thrds.lint`)."""
 from __future__ import annotations
 
-from thrds.lint import BSKY_POST_LIMIT, BskyLinter, DiscordLinter, LintIssue, LintReport
+from thrds.lint import (
+    BSKY_POST_LIMIT,
+    MASTODON_POST_LIMIT,
+    BskyLinter,
+    DiscordLinter,
+    LintIssue,
+    LintReport,
+    MastodonLinter,
+)
 
 
 def _lint(text: str) -> list[LintIssue]:
@@ -10,6 +18,10 @@ def _lint(text: str) -> list[LintIssue]:
 
 def _blint(text: str) -> list[LintIssue]:
     return BskyLinter().lint(text).issues
+
+
+def _mlint(text: str) -> list[LintIssue]:
+    return MastodonLinter().lint(text).issues
 
 
 # --- masked links (Discord renders them fine since 2023; no rule) ---
@@ -271,3 +283,88 @@ def test_bsky_masked_link_inside_code_fence_ignored():
     ml_issues = [i for i in issues if i.rule == "bsky/masked-link"]
     assert len(ml_issues) == 1
     assert ml_issues[0].line == 4
+
+
+# --- mastodon: post length (default 500) ---
+
+
+def test_mastodon_limit_is_500():
+    assert MASTODON_POST_LIMIT == 500
+
+
+def test_mastodon_short_paragraph_no_issue():
+    assert _mlint("Short toot.\n") == []
+
+
+def test_mastodon_at_limit_no_issue():
+    """Exactly MASTODON_POST_LIMIT chars is allowed; over is not."""
+    assert _mlint("x" * MASTODON_POST_LIMIT + "\n") == []
+
+
+def test_mastodon_over_limit_flagged():
+    over = "x" * (MASTODON_POST_LIMIT + 1)
+    assert _mlint(over + "\n") == [LintIssue(
+        line=1,
+        column=1,
+        severity="warning",
+        rule="mastodon/post-too-long",
+        message=f"paragraph is {MASTODON_POST_LIMIT + 1} chars; Mastodon default post limit is {MASTODON_POST_LIMIT}",
+    )]
+
+
+def test_mastodon_bsky_length_ok_on_mastodon():
+    """A 400-char paragraph is over bsky's 300 limit but under Mastodon's 500."""
+    para = "z" * 400
+    assert _blint(para + "\n")[0].rule == "bsky/post-too-long"
+    assert _mlint(para + "\n") == []
+
+
+def test_mastodon_thrds_separators_excluded_from_paragraph():
+    body = "z" * 300  # under the 500 limit
+    text = f"=== a\n\n{body}\n---\n{body}\n"
+    assert _mlint(text) == []
+
+
+def test_mastodon_multiple_paragraphs_checked_independently():
+    p1 = "a" * 600
+    p2 = "short"
+    p3 = "b" * 700
+    text = f"{p1}\n\n{p2}\n\n{p3}\n"
+    assert [(i.line, i.rule) for i in _mlint(text)] == [
+        (1, "mastodon/post-too-long"),
+        (5, "mastodon/post-too-long"),
+    ]
+
+
+# --- mastodon: masked links ---
+
+
+def test_mastodon_masked_link_flagged():
+    assert _mlint("See [docs](https://ex.com).\n") == [LintIssue(
+        line=1,
+        column=5,
+        severity="warning",
+        rule="mastodon/masked-link",
+        message="masked link '[docs](https://ex.com)' renders as literal text on Mastodon; use a bare URL (auto-linked)",
+    )]
+
+
+def test_mastodon_bare_url_not_flagged():
+    """Mastodon auto-links bare URLs — no warning."""
+    assert _mlint("See https://ex.com for more.\n") == []
+
+
+def test_mastodon_masked_link_inside_code_fence_ignored():
+    text = "```\n[link](https://x.example)\n```\nsee [link](https://y.example)\n"
+    ml_issues = [i for i in _mlint(text) if i.rule == "mastodon/masked-link"]
+    assert [i.line for i in ml_issues] == [4]
+
+
+def test_mastodon_masked_link_and_post_length_both_reported():
+    """Both rules fire independently; report is sorted (line, column)."""
+    prefix = "a" * 490 + " "  # 491 chars; + masked link + extra → over 500
+    para = f"{prefix}[a](https://ex.com) extra."
+    assert [(i.line, i.column, i.rule) for i in _mlint(para + "\n")] == [
+        (1, 1, "mastodon/post-too-long"),
+        (1, len(prefix) + 1, "mastodon/masked-link"),
+    ]
