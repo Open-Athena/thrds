@@ -1,13 +1,13 @@
 # thrds
 
-Declarative thread sync for Slack, Discord, Bluesky, and GitHub (PRs/issues).
+Declarative thread sync for Slack, Discord, Bluesky, Mastodon, and GitHub (PRs/issues).
 
 Two layers:
 
-- **[CLI](#cli)** — draft threads/posts/PRs as local markdown, one session per doc in a private git repo mirrored to a secret gist, then sync or publish per platform: [`thrds slack`](#slack--thrds-slack--slck) (a.k.a. `slck`), [`thrds github`](#github--thrds-github--ghpr) (a.k.a. `ghpr`), [`thrds discord`](#discord--thrds-discord), [`thrds bsky`](#bluesky--thrds-bsky), [`thrds capture`](#capture--thrds-capture).
-- **[Library](#library)** — `SlackClient` / `DiscordClient` / `BskyClient` take a desired thread state (list of message contents), diff against existing messages, and apply minimal edits/posts/deletes to converge.
+- **[CLI](#cli)** — draft threads/posts/PRs as local markdown, one session per doc in a private git repo mirrored to a secret gist, then sync or publish per platform: [`thrds slack`](#slack--thrds-slack--slck) (a.k.a. `slck`), [`thrds github`](#github--thrds-github--ghpr) (a.k.a. `ghpr`), [`thrds discord`](#discord--thrds-discord), [`thrds bsky`](#bluesky--thrds-bsky), [`thrds mastodon`](#mastodon--thrds-mastodon), [`thrds capture`](#capture--thrds-capture).
+- **[Library](#library)** — `SlackClient` / `DiscordClient` / `BskyClient` / `MastodonClient` take a desired thread state (list of message contents), diff against existing messages, and apply minimal edits/posts/deletes to converge.
 
-> A TypeScript port (Slack subset) lives on the [`ts` branch][ts-branch], published on npm as [`@rdub/thrds`][npm]; both share `tests/fixtures/sync.json` as the cross-language contract for the sync algorithm.
+> A TypeScript port (Slack subset) lives on the [`ts` branch][ts-branch], published on npm as [`@open-athena/thrds`][npm]; both share `tests/fixtures/sync.json` as the cross-language contract for the sync algorithm.
 
 ## Install
 
@@ -16,7 +16,7 @@ pip install thrds            # Core (zero deps); installs `thrds`, `slck`, `ghpr
 pip install thrds[bsky]      # + Bluesky (atproto)
 ```
 
-Slack and Discord clients use only stdlib (`urllib`) and a `curl` subprocess respectively.
+Slack, Discord, and Mastodon clients use only stdlib (`urllib`) and a `curl` subprocess respectively (no extra deps — `[bsky]` is the only extra with a dependency). Mastodon's `[mastodon]` extra exists for symmetry but pulls nothing in.
 
 ## CLI
 
@@ -184,6 +184,19 @@ thrds bsky render | pbcopy       # MD → clipboard
 thrds bsky open                  # browse the gist
 ```
 
+### Mastodon — `thrds mastodon`
+
+Same phase-1 shape as `discord`/`bsky` — init + render + lint + open, gist-mirrored, no live `push` verb yet. Mastodon's constraints mirror Bluesky's (no markdown parsing → masked links render literal, bare URLs auto-link), with a longer **500-char** default post limit (instance-configurable):
+
+```bash
+thrds mastodon init draft.md     # scaffold session dir + gist
+thrds mastodon lint              # 500-char + masked-link warnings
+thrds mastodon render | pbcopy   # MD → clipboard
+thrds mastodon open              # browse the gist
+```
+
+Unlike Bluesky, Mastodon has a **first-class edit API** (`PUT /api/v1/statuses/:id`, keeping the post id + engagement), which is why it's the better public-syndication target for a bot whose posts get corrected after the fact. `thrds.mastodon.MastodonClient` is a full `ThreadClient` (stdlib-only, real `edit()`) importable for scripting posts directly; a live `thrds mastodon push` verb is the remaining follow-up (`specs/mastodon-platform.md`).
+
 ### Capture — `thrds capture`
 
 Capture-only sessions: same on-disk shape (git repo + gist mirror), no platform target — for capturing the iteration history of a post you'll paste somewhere `thrds` doesn't (yet) integrate with. The minimal flow is two commands → a secret, one-file, two-revision gist:
@@ -209,36 +222,44 @@ Every state-mutating verb auto-commits **and pushes** to the session's gist. `TH
 
 ## Platform capabilities
 
-What each transport can do. The columns are the four sync clients — Slack (`SlackClient`), Discord under a bot token (`DiscordClient`) vs. via a channel webhook (`DiscordWebhookClient`), and Bluesky (`BskyClient`). GitHub is a different model (see below the table).
+What each transport can do. The columns are the five sync clients — Slack (`SlackClient`), Discord under a bot token (`DiscordClient`) vs. via a channel webhook (`DiscordWebhookClient`), Bluesky (`BskyClient`), and Mastodon (`MastodonClient`). GitHub is a different model (see below the table).
 
-| | Slack | Discord (bot) | Discord (webhook) | Bluesky |
-|---|:---:|:---:|:---:|:---:|
-| Post a message | ✅ | ✅ | ✅ | ✅ |
-| Edit a message | ✅ | ✅ | ✅ | ❌ → delete+repost |
-| Delete a message | ✅ | ✅ | ✅ (own) | ✅ |
-| Read / list a thread (needed to reconcile) | ✅ | ✅ | ❌ (pair with a bot) | ✅ |
-| Post with a custom sender (name + avatar) | ✅ | ❌ | ✅ | ❌ |
-| Turn a message into a thread | auto¹ | ✅ (explicit) | ❌ (can't open one) | auto¹ |
-| Reply into a thread | ✅ | ✅ | ✅ (`?thread_id=`) | ✅ |
-| Edit a reply | ✅ | ✅ | ✅ | ❌ → delete+repost |
-| Post a reply with a custom sender | ✅ | ❌ | ✅ | ❌ |
-| **Edit an existing message's sender** | ❌ | ❌ | ❌ | ❌ |
-| Attach an image / file | ✅² | ❌ | ✅² (upload) | ❌ |
-| Refresh that image in place (on edit) | ✅² | ❌ | ✅² | ❌ |
-| Custom emoji inline in text | ✅³ | ✅³ | ✅³ | ❌ |
+| | Slack | Discord (bot) | Discord (webhook) | Bluesky | Mastodon |
+|---|:---:|:---:|:---:|:---:|:---:|
+| Post a message | ✅ | ✅ | ✅ | ✅ | ✅ |
+| Edit a message | ✅ | ✅ | ✅ | ❌ → delete+repost | ✅⁶ |
+| Delete a message | ✅ | ✅ | ✅ (own) | ✅ | ✅ |
+| Read / list a thread (needed to reconcile) | ✅ | ✅ | ❌ (pair with a bot) | ✅ | ✅ |
+| Post with a custom sender (name + avatar) | ✅ | ❌ | ✅ | ❌ | ❌ |
+| Turn a message into a thread | auto¹ | ✅ (explicit) | ❌ (can't open one) | auto¹ | auto¹ |
+| Reply into a thread | ✅ | ✅ | ✅ (`?thread_id=`) | ✅ | ✅ |
+| Edit a reply | ✅ | ✅ | ✅ | ❌ → delete+repost | ✅⁶ |
+| Post a reply with a custom sender | ✅ | ❌ | ✅ | ❌ | ❌ |
+| **Edit an existing message's sender** | ❌ | ❌ | ❌ | ❌ | ❌ |
+| Attach an image / file | ✅² | ❌ | ✅² (upload) | ❌ | ❌ (deferred) |
+| Refresh that image in place (on edit) | ✅² | ❌ | ✅² | ❌ | ❌ |
+| Custom emoji inline in text | ✅³ | ✅³ | ✅³ | ❌ | ✅³ |
+| Labeled link (`[text](url)`, text ≠ URL) | ✅⁴ | ✅⁴ | ✅⁴ | ❌⁴ | ❌⁴ |
+| — with an emoji in the label | ⚠️⁵ | ❌⁵ | ✅⁵ | ❌ | ❌ |
 | Per-message char limit | 4000 | 2000 | 2000 | 300 / paragraph |
 
 ¹ Slack and Bluesky thread *implicitly*: a reply addresses the OP's own id (Slack's `thread_ts`, Bluesky's reply refs), so any message is already a thread root — there is no separate "create thread" call. Discord's thread is a distinct channel that must be `create_thread`'d off the OP (a message id isn't a channel), which is why `sync` has the `open_thread` seam that only `DiscordClient` implements.
 
 ² Two different mechanisms, **one authoring surface** — a `Msg(content, images=[Image(url=…, path=…, alt=…, bust=…)])`, or a trailing `![alt](target)` line in a doc, either way an `Image` (`specs/unified-image-attachments.md`). A picture in the message that updates in place, keeping the same message id (no repost). **Slack** references a hosted URL in a Block Kit *image block* and refreshes it by editing the block's URL; a `{bust}` forces a refetch when the bytes change under a stable URL (`specs/done/editable-image-blocks.md`). The **Discord webhook** uploads the bytes as a real multipart *attachment* and refreshes by re-uploading on edit; a `url` image it fetches first. A hosted **URL is the cross-platform currency** — it works on both. Local `path` bytes upload on Discord (webhook multipart) and on **Slack** too: Slack hosts them via its external-upload flow and references the file in the block by id (`slack_file`), content-addressed so a re-push uploads iff the bytes change (`specs/slack-lazy-image-upload.md`). The Discord **bot** API can attach files too, but only the webhook transport is wired (what the per-sender digests use). Bluesky's image embeds aren't wired.
 
-³ Custom emoji live *inline in the message text*, a different slot from the sender avatar (which is a hosted image URL, not an emoji). The syntax differs: **Slack** references workspace emoji by name — `:my_emoji:`; **Discord** references them by `<:name:id>` (static) / `<a:name:id>` (animated), resolving to a **guild** emoji (uploaded to a server) or an **application** emoji (owned by the bot app — the reusable, Slack-workspace-like option). Who can *render* them differs by transport: the **bot** always can; a **webhook** only if it's **app-owned** (created by the bot via `POST /channels/{id}/webhooks`, so its `application_id` is the app's). A **user-created** webhook (the "Integrations → Webhooks" kind) **silently strips** `<:name:id>` to the bare text `:name:` on ingest — so app-emoji digests need an app-owned webhook, which `discord push` **auto-creates** from the bot token when no webhook is configured. `discord push` also rewrites `:name:` → `<:name:id>` for the app's own emoji (where it round-trips), so you author the readable `:name:` and it renders as the custom emoji (`specs/done/discord-app-emoji.md`). Bluesky has no custom emoji.
+³ Custom emoji live *inline in the message text*, a different slot from the sender avatar (which is a hosted image URL, not an emoji). The syntax differs: **Slack** references workspace emoji by name — `:my_emoji:`; **Discord** references them by `<:name:id>` (static) / `<a:name:id>` (animated), resolving to a **guild** emoji (uploaded to a server) or an **application** emoji (owned by the bot app — the reusable, Slack-workspace-like option). Who can *render* them differs by transport: the **bot** always can; a **webhook** only if it's **app-owned** (created by the bot via `POST /channels/{id}/webhooks`, so its `application_id` is the app's). A **user-created** webhook (the "Integrations → Webhooks" kind) **silently strips** `<:name:id>` to the bare text `:name:` on ingest — so app-emoji digests need an app-owned webhook, which `discord push` **auto-creates** from the bot token when no webhook is configured. `discord push` also rewrites `:name:` → `<:name:id>` for the app's own emoji (where it round-trips), so you author the readable `:name:` and it renders as the custom emoji (`specs/done/discord-app-emoji.md`). Bluesky has no custom emoji. **Mastodon** renders `:shortcode:` for *instance*-hosted custom emoji (admin-managed, uploaded per-instance; there's no per-user upload and no Discord-style `<:name:id>`-by-id form), so a shortcode the instance defines renders inline; thrds doesn't rewrite or substitute them.
+
+⁴ Labeled links — display text ≠ URL. **Slack** uses `<url|text>` mrkdwn; **Discord** renders `[text](url)` in ordinary message content, bot and webhook alike, since its 2023 markdown update (with a click-through interstitial for untrusted domains — `specs/done/discord-masked-links-render.md`). **Bluesky** has no markdown-link syntax: it auto-linkifies bare URLs via facets, and `[text](url)` renders as literal text (the `bsky/masked-link` lint warns); a facet *could* carry separate display text, but thrds doesn't emit one. **Mastodon** is the same story: vanilla Mastodon doesn't parse markdown, so `[text](url)` renders literally (the `mastodon/masked-link` lint warns) and bare URLs auto-link.
+
+⁵ An emoji *inside* the link's label — narrower than emoji inline in text (footnote ³), and a thrds-only styling reach (no Discord/Slack client lets you hand-compose one). **Slack** (⚠️): a raw Unicode character renders (it's just text in the label), but a `:shortcode:` — standard *or* custom — stays **literal** (emoji substitution doesn't run inside a link label), so a custom emoji, which has no Unicode form, can't appear in a Slack link at all. **Discord bot** (❌): any emoji in the label, Unicode or `<:name:id>`, **breaks the whole link** — it falls back to literal `[…](…)` (a *bare* emoji renders fine, just not inside a link). **Discord app-owned webhook** (✅): both Unicode and custom `<:name:id>` render in the label (a *user-created* webhook first strips `<:name:id>` to `:name:` per footnote ³, so custom shows literal there). Verified live 2026-09-15.
+
+⁶ **Mastodon edits in place** — `PUT /api/v1/statuses/:id` (available since Mastodon v3.5) keeps the status id and its boosts / favourites / replies, so `MastodonClient.edit` never falls back to delete+repost. This is the property Bluesky lacks and the reason thrds grew a Mastodon target (`specs/mastodon-platform.md`); the client is implemented and unit-tested, with a live `push` verb the remaining follow-up.
 
 Reading the table:
 
 - **Editing a sender is impossible everywhere.** The sender (display name + avatar) is fixed when a message is posted. Slack's `chat.update` and Discord's webhook edit both silently ignore `username`/`avatar` on edit; the Discord bot API and Bluesky have no per-message sender at all. So a per-sender mosaic can be *built* incrementally but never *re-attributed*.
 - **Custom senders:** Slack does it under one bot token (`chat:write.customize`). Discord's bot token is a *single* identity — per-message name/avatar needs the **webhook** transport. For a threaded per-contributor digest, pair the two: a `DiscordClient` opens the thread and owns reconcile, and a `DiscordWebhookClient` fans the per-sender replies into it via `?thread_id=` (`DiscordClient.post` *raises* on a sender override rather than silently dropping it, pointing you here). The **OP** can carry a sender too — `DiscordHybridClient` webhook-posts it to the parent channel and the bot opens the thread off it (a bot can `create_thread` off any channel message, webhook-authored included); its edits route back to the webhook with no `?thread_id`. Bluesky posts only as the logged-in account.
-- **Reconcile (declarative edit-in-place) needs read + edit.** Slack and Discord converge a live thread to the doc (edit changed messages, add/delete the rest). Bluesky has no edit API, so any content change degrades to delete+repost — losing reactions, permalinks, and position — and it can't reconcile a mixed-author thread.
+- **Reconcile (declarative edit-in-place) needs read + edit.** Slack, Discord, and Mastodon converge a live thread to the doc (edit changed messages, add/delete the rest). Bluesky has no edit API, so any content change degrades to delete+repost — losing reactions, permalinks, and position — and it can't reconcile a mixed-author thread. Mastodon *does* have an edit API (footnote ⁶), which is why it's the better public-syndication target for a bot whose posts get corrected after the fact.
 
 **GitHub** (`thrds github` / `ghpr`) is deliberately not in the table: it edits issue/PR **bodies and comments** as the authenticated user — no bots, no per-message senders, no thread creation. Its "thread" is the issue or PR and its comment list, and its verbs are clone → edit locally → push, not a live declarative sync.
 
@@ -384,5 +405,5 @@ class Action:
 [raw-spec]: specs/done/raw-mrkdwn-passthrough.md
 [hudcostreets/nj-crashes]: https://github.com/hudcostreets/nj-crashes
 [Open-Athena/marin-discord]: https://github.com/Open-Athena/marin-discord
-[ts-branch]: https://github.com/runsascoded/thrds/tree/ts
-[npm]: https://www.npmjs.com/package/@rdub/thrds
+[ts-branch]: https://github.com/Open-Athena/thrds/tree/ts
+[npm]: https://www.npmjs.com/package/@open-athena/thrds

@@ -1,7 +1,7 @@
 [project]
 name = "thrds"
-version = "0.5.0"
-description = "Declarative thread sync for Slack, Discord, Bluesky, and GitHub"
+version = "0.6.0"
+description = "Declarative thread sync for Slack, Discord, Bluesky, Mastodon, and GitHub"
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.11"
@@ -22,14 +22,15 @@ slck = "thrds.cli:slack_main"
 ghpr = "thrds.cli:github_main"
 
 [project.urls]
-Homepage = "https://github.com/runsascoded/thrds"
-Repository = "https://github.com/runsascoded/thrds"
-Issues = "https://github.com/runsascoded/thrds/issues"
+Homepage = "https://github.com/Open-Athena/thrds"
+Repository = "https://github.com/Open-Athena/thrds"
+Issues = "https://github.com/Open-Athena/thrds/issues"
 PyPI = "https://pypi.org/project/thrds"
 
 [project.optional-dependencies]
 slack = []           # Zero deps (stdlib urllib)
 discord = []         # Zero deps (subprocess curl)
+mastodon = []        # Zero deps (stdlib urllib)
 bsky = ["atproto>=0.0.46"]
 all = ["atproto>=0.0.46"]
 test = ["pytest"]

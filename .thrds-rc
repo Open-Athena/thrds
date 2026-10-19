@@ -1,4 +1,4 @@
-# thrds - multi-thread post drafting (https://github.com/runsascoded/thrds)
+# thrds - multi-thread post drafting (https://github.com/Open-Athena/thrds)
 # Sample rc file; source from your dotfiles (or via `~/.private/.thrds-rc`).
 #
 # Naming: `ts*` = slack subgroup, `tc*` = capture subgroup. Session verbs get
