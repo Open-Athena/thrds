@@ -1,16 +1,19 @@
 {
-  "name": "@rdub/thrds",
-  "version": "0.1.1",
+  "name": "@open-athena/thrds",
+  "version": "0.1.2",
   "description": "Declarative thread sync for Slack, Discord, and Bluesky",
   "license": "MIT",
   "author": "Ryan Williams",
-  "homepage": "https://github.com/runsascoded/thrds",
+  "homepage": "https://github.com/Open-Athena/thrds",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/runsascoded/thrds.git"
+    "url": "git+https://github.com/Open-Athena/thrds.git"
   },
   "bugs": {
-    "url": "https://github.com/runsascoded/thrds/issues"
+    "url": "https://github.com/Open-Athena/thrds/issues"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "keywords": [
     "slack",

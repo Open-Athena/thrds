@@ -98,10 +98,10 @@ git checkout py -- tests/fixtures/
 CI on tag `ts-vX.Y.Z` publishes to npm via [OIDC trusted publishing][npm-tp] — no long-lived `NPM_TOKEN` secret. One-time bootstrap (npm doesn't let trusted publishers be configured on a package that doesn't yet exist):
 
 1. Inaugural `npm publish --access public --provenance` from local (after `npm login`).
-2. On npmjs.com: package settings → **Trusted Publishers** → add `runsascoded/thrds`, workflow `release.yml`, environment blank.
+2. On npmjs.com: package settings → **Trusted Publishers** → add `Open-Athena/thrds`, workflow `release.yml`, environment blank.
 3. All subsequent releases via CI.
 
-[py-branch]: https://github.com/runsascoded/thrds/tree/py
+[py-branch]: https://github.com/Open-Athena/thrds/tree/py
 [pypi]: https://pypi.org/project/thrds
-[port-spec]: https://github.com/runsascoded/thrds/blob/py/specs/typescript-port.md
+[port-spec]: https://github.com/Open-Athena/thrds/blob/py/specs/typescript-port.md
 [npm-tp]: https://docs.npmjs.com/trusted-publishers
