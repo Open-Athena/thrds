@@ -426,6 +426,7 @@ class SlackClient:
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
         raw: bool | None = None,
+        broadcast: bool = False,
     ) -> Message:
         """
         Sender fields resolve message override → client default → unset.
@@ -444,7 +445,19 @@ class SlackClient:
         When resolved to ``True``, ``content`` is sent verbatim as wire
         ``text`` (no ``to_slack()`` md→mrkdwn conversion) — for consumers
         already emitting Slack mrkdwn. See `specs/done/raw-mrkdwn-passthrough.md`.
+
+        ``broadcast`` sends ``reply_broadcast: true`` on ``chat.postMessage``
+        (Slack's "Also send to channel"): the reply still lives in the thread
+        but a copy surfaces in the channel. It requires ``thread_id`` — Slack
+        ignores the flag on a top-level message, so ``broadcast=True`` without
+        one is a caller bug and **raises** ``ValueError``.
+        See `specs/done/slack-reply-broadcast.md`.
         """
+        if broadcast and thread_id is None:
+            raise ValueError(
+                "broadcast=True requires a thread_id: Slack's reply_broadcast "
+                "('Also send to channel') only applies to a thread reply."
+            )
         content = self._fold_images_into_content(content, images)
         if len(content) > SLACK_MESSAGE_LIMIT:
             raise ValueError(
@@ -496,6 +509,8 @@ class SlackClient:
             self._lift_image_blocks(data, image_refs)
         if thread_id is not None:
             data["thread_ts"] = thread_id
+            if broadcast:
+                data["reply_broadcast"] = True
         md = self._metadata_for(content)
         if md is not None:
             data["metadata"] = md

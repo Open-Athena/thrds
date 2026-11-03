@@ -24,3 +24,10 @@ Wire-payload tests in the existing style:
 ## Consumer
 
 disky's `cloud/src/dt_cloud/digest.py` `converge_slack` posts one broadcast "alert" reply while any zone is at or above the digest config's alert threshold (cw: 90%). It edits the reply in place as the numbers change and deletes it once every zone is back below the threshold. The daily replies are never broadcast; they mark over-threshold zones with ⚠️. disky pins thrds from the lock and bumps it after this lands.
+
+## Implemented (2026-11-02)
+
+- `SlackClient.post` gains `broadcast: bool = False` (`thrds/slack.py`). When `True` it sets `reply_broadcast: true` on the `chat.postMessage` payload, beside `thread_ts`. `broadcast=True` with `thread_id=None` raises `ValueError` before any wire call. `False` sends today's payload unchanged. `edit` is untouched (Slack can't un-broadcast; retract by `delete`, which removes both copies).
+- `broadcast` is a platform-specific option, so it follows the established sender/`images` pattern: it's in the `ThreadClient` protocol (`thrds/protocol.py`), and every non-Slack transport **raises** `NotImplementedError` on `broadcast=True` before touching the wire — `DiscordClient` / `DiscordWebhookClient` / `DiscordHybridClient` (`thrds/discord.py`, three `post`s; the hybrid guards explicitly since its `via_webhook=False` fast paths don't forward kwargs), `BskyClient` (`thrds/bsky.py`), `MastodonClient` (`thrds/mastodon.py`). Message: ``"<Platform> has no `reply_broadcast` analogue (`broadcast=` is Slack-specific)."``
+- Tests: `tests/test_reply_broadcast.py` — exact wire-payload dicts for `post` with/without `broadcast` (and a bare top-level post), the `ValueError` without `thread_id`, and the `NotImplementedError` from each non-Slack transport (Bluesky behind `importorskip("atproto")`, as the base/CI env lacks the `bsky` extra).
+- Fakes: the test fakes already accepting `**kw` (`test_promote_cli`, `test_promote_foreign_thread`, `test_adopt_cli`) swallow the new kwarg; `sync()` never passes `broadcast` (it's a one-shot delivery concern, not reconciled desired state), so the explicit-signature Slack fakes needed no change.

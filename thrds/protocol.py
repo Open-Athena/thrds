@@ -17,6 +17,7 @@ class ThreadClient(Protocol):
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message: ...
     def edit(
         self,

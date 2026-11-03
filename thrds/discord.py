@@ -343,6 +343,7 @@ class DiscordClient(_DiscordHTTP):
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message:
         """Post a message as the bot.
 
@@ -357,7 +358,15 @@ class DiscordClient(_DiscordHTTP):
         `post` doesn't build the multipart attachment upload — so non-empty
         ``images`` **raises**. The `DiscordHybridClient` sends any attachment-
         bearing message via its webhook.
+
+        ``broadcast`` is Slack's `reply_broadcast`; Discord has no analogue, so
+        ``broadcast=True`` **raises**.
         """
+        if broadcast:
+            raise NotImplementedError(
+                "Discord has no `reply_broadcast` analogue (`broadcast=` is "
+                "Slack-specific)."
+            )
         if username is not None or icon_url is not None or icon_emoji is not None:
             raise NotImplementedError(
                 "Discord's bot API cannot set a per-message sender "
@@ -658,6 +667,7 @@ class DiscordWebhookClient(_DiscordHTTP):
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message:
         """Post a webhook message, optionally with image attachments.
 
@@ -665,7 +675,15 @@ class DiscordWebhookClient(_DiscordHTTP):
         fetched then uploaded) go as multipart alongside the text; they render
         inline like any user attachment, and `suppress_embeds` (which only hides
         link previews) leaves them visible. Empty ``images`` sends the
-        byte-identical JSON request as before."""
+        byte-identical JSON request as before.
+
+        ``broadcast`` is Slack's `reply_broadcast`; Discord has no analogue, so
+        ``broadcast=True`` **raises**."""
+        if broadcast:
+            raise NotImplementedError(
+                "Discord has no `reply_broadcast` analogue (`broadcast=` is "
+                "Slack-specific)."
+            )
         if icon_emoji is not None:
             raise NotImplementedError(
                 "Discord webhooks have no emoji avatar; pass a hosted image URL as "
@@ -823,7 +841,13 @@ class DiscordHybridClient:
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message:
+        if broadcast:
+            raise NotImplementedError(
+                "Discord has no `reply_broadcast` analogue (`broadcast=` is "
+                "Slack-specific)."
+            )
         via_webhook = username is not None or icon_url is not None or icon_emoji is not None or bool(images)
         if thread_id is None:
             # OP. A plain OP is the bot's single identity; one carrying a sender

@@ -69,13 +69,23 @@ class BskyClient:
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message:
         """Create a post. If thread_id is given, reply to the root post.
 
         Sender-override fields (username/icon_url/icon_emoji) exist for
         `ThreadClient` protocol parity, but Bluesky has no per-message sender
         concept — so any non-None value **raises** rather than being silently
-        dropped (a caller asking for a sender it can't get should know)."""
+        dropped (a caller asking for a sender it can't get should know).
+
+        ``broadcast`` is Slack's `reply_broadcast` (`SlackClient.post`); Bluesky
+        has no analogue, so ``broadcast=True`` **raises** rather than posting a
+        reply the caller believes is also surfaced somewhere it isn't."""
+        if broadcast:
+            raise NotImplementedError(
+                "Bluesky has no `reply_broadcast` analogue (`broadcast=` is "
+                "Slack-specific)."
+            )
         if username is not None or icon_url is not None or icon_emoji is not None:
             raise NotImplementedError(
                 "Bluesky has no per-message sender concept "

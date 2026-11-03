@@ -175,13 +175,22 @@ class MastodonClient:
         icon_url: str | None = None,
         icon_emoji: str | None = None,
         images: Sequence[Image] = (),
+        broadcast: bool = False,
     ) -> Message:
         """Post a status; if ``thread_id`` is set, reply to it (flat threading).
 
         Sender-override fields exist for `ThreadClient` parity but Mastodon has
         no per-message sender — a non-None value **raises** rather than being
         silently dropped (same contract as `BskyClient`).
+
+        ``broadcast`` is Slack's `reply_broadcast`; Mastodon has no analogue, so
+        ``broadcast=True`` **raises** (same contract as `BskyClient`).
         """
+        if broadcast:
+            raise NotImplementedError(
+                "Mastodon has no `reply_broadcast` analogue (`broadcast=` is "
+                "Slack-specific)."
+            )
         if username is not None or icon_url is not None or icon_emoji is not None:
             raise NotImplementedError(
                 "Mastodon has no per-message sender concept "
