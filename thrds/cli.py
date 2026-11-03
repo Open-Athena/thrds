@@ -3295,11 +3295,12 @@ def _run_mastodon_lint(doc_text: str, doc_path: str) -> int:
 
 @cli.group("mastodon")
 def mastodon_cli():
-    """Mastodon workflow: init, render (for paste), lint (post-length + link check).
+    """Mastodon workflow: init, render (for paste), lint, and a live `push`.
 
-    Same phase-1 shape as `discord` / `bsky` — no `push` verb yet, though
-    `thrds.mastodon.MastodonClient` (a full `ThreadClient` with a real edit
-    API) is importable for scripting posts directly.
+    `push` posts (and re-pushing reconciles) a session's doc to a real
+    instance via `MastodonClient` — coherent here, unlike `bsky`, because
+    Mastodon's edit API lets a re-push edit in place. Instance + token come
+    from the env (``THRDS_MASTODON_INSTANCE`` / ``THRDS_MASTODON_TOKEN``).
     """
     pass
 
@@ -3311,8 +3312,8 @@ def mastodon_init(no_gist: bool, doc_path: str):
     """Initialize a `thrds mastodon` session for DOC_PATH.
 
     Same on-disk shape as the other platform inits — session dir under
-    ``<git-root-or-cwd>/mastodon/<slug>/``, optionally gist-mirrored. No live
-    API plumbing (that lives in `MastodonClient` for scripting).
+    ``<git-root-or-cwd>/mastodon/<slug>/``, optionally gist-mirrored. Posting
+    is a separate `thrds mastodon push` (instance + token from the env).
     """
     target, state, was_resume = _do_init(doc_path, no_gist, channel_prefix=None, platform='mastodon')
     if was_resume:
@@ -3372,6 +3373,113 @@ def mastodon_open(no_open: bool):
     err(f'Opening gist {state.gist_id}: {url}')
     if not no_open:
         webbrowser.open(url)
+
+
+MASTODON_INSTANCE_ENV = 'THRDS_MASTODON_INSTANCE'
+MASTODON_TOKEN_ENV = 'THRDS_MASTODON_TOKEN'
+MASTODON_VISIBILITY_ENV = 'THRDS_MASTODON_VISIBILITY'
+
+
+def _mastodon_client(
+    state: SessionState,
+    instance: str | None = None,
+    *,
+    require_token: bool = True,
+):
+    """Resolve a `MastodonClient` for this session (flag → env → session state).
+
+    Access token from ``THRDS_MASTODON_TOKEN`` (never a flag — the token-
+    handling rule). ``require_token=False`` lets a dry run build the plan with
+    no credentials (a dry run makes no API calls, so the token is never sent).
+    Default post visibility from ``THRDS_MASTODON_VISIBILITY`` (else ``public``).
+    """
+    from .mastodon import MastodonClient
+
+    instance_url = instance or os.environ.get(MASTODON_INSTANCE_ENV) or state.mastodon_instance
+    if not instance_url:
+        raise click.UsageError(
+            f'No Mastodon instance; pass --instance, set {MASTODON_INSTANCE_ENV}, '
+            'or record one in the session (a prior push does).'
+        )
+    token = os.environ.get(MASTODON_TOKEN_ENV)
+    if not token:
+        if require_token:
+            raise click.UsageError(
+                f'Set {MASTODON_TOKEN_ENV} to a Mastodon access token to push '
+                '(scopes `read:statuses write:statuses`).'
+            )
+        token = 'dry-run'  # never sent — a dry run posts nothing
+    visibility = os.environ.get(MASTODON_VISIBILITY_ENV, 'public')
+    return MastodonClient(instance_url, token, visibility=visibility)
+
+
+@mastodon_cli.command("push")
+@click.option('-i', '--instance', help=f'Mastodon instance URL (overrides {MASTODON_INSTANCE_ENV} / session).')
+@click.option('-j', '--jitter', type=float, default=0.0, help='Extra random 0..jitter seconds added to --pace.')
+@click.option('-n', '--dry-run', is_flag=True, help='Show the plan; post nothing.')
+@click.option('-p', '--pace', type=float, default=0.5, help='Seconds to wait between posts (Mastodon rate-limits writes).')
+@click.argument('doc_path', required=False)
+def mastodon_push(
+    instance: str | None,
+    jitter: float,
+    dry_run: bool,
+    pace: float,
+    doc_path: str | None,
+):
+    """Post this session's doc to Mastodon: OP as a status, replies in a flat thread.
+
+    The doc's OP (before the first ``+++``) posts as a status; each reply
+    addresses the OP (``in_reply_to_id = OP``), which Mastodon renders as one
+    thread. Re-pushing a session that already has a recorded OP **reconciles**
+    the live thread to the doc — editing changed statuses in place (Mastodon's
+    real edit API keeps the status id, boosts, and favourites), posting new
+    replies, and deleting removed ones.
+
+    Instance + token come from the env (``THRDS_MASTODON_INSTANCE`` /
+    ``THRDS_MASTODON_TOKEN``); ``--instance`` overrides the former. Per-message
+    sender overrides and image attachments are unsupported (they raise) — same
+    as `bsky`.
+    """
+    from .core import Thread
+    from .md import parse_thread, resolve_messages
+
+    state = _load_state(expected_platform='mastodon')
+    path = _resolve_doc_path(state, doc_path)
+    text = Path(path).read_text()
+    parsed = parse_thread(text)
+    messages = resolve_messages(parsed.thread.messages, parsed.frontmatter)
+
+    repush = state.mastodon_op_id is not None
+    # A re-push reads the live thread to compute the diff, so it needs a real
+    # token even under --dry-run (unlike a fresh dry-run, which reads nothing).
+    require_creds = repush or not dry_run
+    client = _mastodon_client(state, instance, require_token=require_creds)
+    # Fresh push creates the thread (thread_id=None → OP is a new status); a
+    # re-push points `sync` at the recorded OP so its positional diff aligns.
+    reconcile_thread_id = state.mastodon_op_id if repush else None
+
+    result = client.sync(
+        Thread(messages=messages),
+        thread_id=reconcile_thread_id,
+        dry_run=dry_run,
+        pace=pace,
+        jitter=jitter,
+    )
+
+    if dry_run:
+        err(result.format_preview())
+        verb = 're-push' if repush else 'fresh'
+        err(f'(dry run — {verb}, {len(messages)} message(s), instance {client.base})')
+        return
+
+    state.mastodon_instance = client.base
+    state.mastodon_op_id = result.message_ids[0]
+    state.save()
+
+    op_id = state.mastodon_op_id
+    verb = 'Reconciled' if repush else 'Posted'
+    err(f'{verb} OP {op_id} + {len(messages) - 1} repl(y/ies) on {client.base}.')
+    click.echo(client.permalink(op_id))
 
 
 def main():

@@ -385,6 +385,14 @@ class SessionState:
     discord_op_id: str | None = None
     discord_thread_id: str | None = None
     discord_thread_name: str | None = None
+    # Mastodon session config (platform == 'mastodon'). None-default, so the slim
+    # serializer omits them from every non-Mastodon session. Threading is flat
+    # (every reply addresses the OP), so there's no separate thread id: `op_id`
+    # is the OP status id, filled in by the first `thrds mastodon push` so a
+    # re-push reconciles the same thread; `instance` records where it posted
+    # (the home instance base URL) for the re-push + the permalink.
+    mastodon_instance: str | None = None
+    mastodon_op_id: str | None = None
 
     def __post_init__(self) -> None:
         if self.platform not in VALID_PLATFORMS:

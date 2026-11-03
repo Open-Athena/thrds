@@ -80,6 +80,7 @@ def test_session_dir_is_named_for_the_platform(tmp_path):
         tmp_path / 'slck' / 'trainium',
         tmp_path / 'dscrd' / 'trainium',
         tmp_path / 'bsky' / 'trainium',
+        tmp_path / 'mastodon' / 'trainium',
         tmp_path / 'capture' / 'trainium',
     ]
 
@@ -89,7 +90,7 @@ def test_resolve_session_dir_rejects_an_unknown_platform(tmp_path):
         resolve_session_dir(tmp_path, 'trainium', 'myspace')
     assert str(e.value) == (
         "No session dir configured for platform 'myspace' "
-        "(known: bsky, capture, discord, slack)"
+        "(known: bsky, capture, discord, mastodon, slack)"
     )
 
 

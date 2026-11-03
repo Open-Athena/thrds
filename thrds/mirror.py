@@ -87,6 +87,7 @@ SESSION_DIRS = {
     'slack': 'slck',
     'discord': 'dscrd',
     'bsky': 'bsky',
+    'mastodon': 'mastodon',
     'capture': 'capture',
 }
 

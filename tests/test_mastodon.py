@@ -39,6 +39,7 @@ class FakeMastodon(MastodonClient):
             "content": f"<p>{text}</p>",
             "text": text,
             "in_reply_to_id": in_reply_to,
+            "url": f"https://masto.test/@me/{id_}",
         }
 
     def seed(self, id_: str, text: str, account: str = "ME", in_reply_to: str | None = None) -> None:

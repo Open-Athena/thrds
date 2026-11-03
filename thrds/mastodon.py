@@ -235,6 +235,17 @@ class MastodonClient:
         """Delete a status by id."""
         self._request(f"v1/statuses/{message_id}", method="DELETE")
 
+    def permalink(self, status_id: str) -> str:
+        """The canonical public URL of a status (its authoritative ``url`` field).
+
+        A status's ``url`` can live on a different host than ``self.base`` (a
+        boosted/remote status), so we read it rather than string-building
+        ``{base}/@user/{id}``.
+        """
+        status = self._request(f"v1/statuses/{status_id}")
+        assert isinstance(status, dict)
+        return status["url"]
+
     def sync(
         self,
         thread: Thread,
