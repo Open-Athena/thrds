@@ -352,11 +352,11 @@ def _mock_api(monkeypatch, comments, threads):
     monkeypatch.setattr(reviews, 'list_review_comments', lambda o, r, n: comments)
     monkeypatch.setattr(reviews, 'list_review_threads', lambda o, r, n: threads)
 
-    def fake_update(owner, repo, cid, body_file):
+    def fake_update(owner, repo, cid, body_file, env=None):
         calls['patch'].append((cid, Path(body_file).read_text()))
         return {'id': int(cid)}
 
-    def fake_reply(owner, repo, number, head_id, body_file):
+    def fake_reply(owner, repo, number, head_id, body_file, env=None):
         calls['reply'].append((head_id, Path(body_file).read_text()))
         new_id = 9000 + len(calls['reply'])
         return {'id': new_id, 'user': {'login': 'ryan-williams'},
@@ -365,8 +365,8 @@ def _mock_api(monkeypatch, comments, threads):
 
     monkeypatch.setattr(reviews, 'update_review_comment', fake_update)
     monkeypatch.setattr(reviews, 'reply_to_review_comment', fake_reply)
-    monkeypatch.setattr(reviews, 'resolve_review_thread', lambda nid: calls['resolve'].append(nid))
-    monkeypatch.setattr(reviews, 'unresolve_review_thread', lambda nid: calls['unresolve'].append(nid))
+    monkeypatch.setattr(reviews, 'resolve_review_thread', lambda nid, env=None: calls['resolve'].append(nid))
+    monkeypatch.setattr(reviews, 'unresolve_review_thread', lambda nid, env=None: calls['unresolve'].append(nid))
     return calls
 
 

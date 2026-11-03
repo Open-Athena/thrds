@@ -7,6 +7,7 @@ from utz import proc, err, cd
 from utz.cli import opt, flag, arg
 
 from ..files import read_description_file, write_description_with_link_ref
+from ..identity import resolve_identity
 from ..patterns import GIST_ID_PATTERN
 
 
@@ -163,6 +164,7 @@ def _finalize_created_item(
     number: str,
     url: str,
     item_type: str,
+    as_login: str | None = None,
 ) -> None:
     """Finalize after creating PR/issue: rename file, commit, rename directory.
 
@@ -172,6 +174,7 @@ def _finalize_created_item(
         number: PR/issue number
         url: GitHub URL
         item_type: 'pr' or 'issue'
+        as_login: Alternate GitHub login for the body-edit write (see `identity.py`).
     """
     old_file = Path('DESCRIPTION.md')
     new_filename = f'{repo}#{number}.md'
@@ -225,7 +228,8 @@ def _finalize_created_item(
         images=False,
         gist_private=None,
         no_comments=True,  # Don't sync comments during create
-        force_others=False
+        force_others=False,
+        as_login=as_login,  # Route the body edit through the alternate account, if any
     )
 
     # Push to gist remote if it exists
@@ -389,6 +393,7 @@ def create(
     yes: int,
     dry_run: bool,
     path: str | None = None,
+    as_login: str | None = None,
 ) -> None:
     """Create a new PR or Issue from the current draft.
 
@@ -397,6 +402,10 @@ def create(
 
     If PATH is given, cd into the resolved draft directory first
     (e.g. `ghpr create foo` operates on `gh/new-foo/`).
+
+    When an alternate identity is selected (`as_login` / `$GHPR_AS` /
+    `git config pr.as`), the PR/issue is *opened* and its body *edited* as that
+    account; with none set, behavior is unchanged.
     """
     # Validate draft flag with web editor mode
     if draft and yes == 0:
@@ -406,9 +415,9 @@ def create(
 
     def _do_create():
         if issue:
-            create_new_issue(repo, yes, dry_run)
+            create_new_issue(repo, yes, dry_run, as_login)
         else:
-            create_new_pr(head, base, draft, repo, yes, dry_run)
+            create_new_pr(head, base, draft, repo, yes, dry_run, as_login)
 
     if path:
         draft_dir = _resolve_draft_path(path)
@@ -428,6 +437,7 @@ def create_new_pr(
     repo_arg: str | None,
     yes: int,
     dry_run: bool,
+    as_login: str | None = None,
 ) -> None:
     """Create a new PR from DESCRIPTION.md.
 
@@ -435,6 +445,7 @@ def create_new_pr(
         yes: 0 = open web editor during creation (default)
              1 = skip prompt, create then open result
              2+ = skip all, create silently
+        as_login: Alternate GitHub login to open the PR as (see `identity.py`).
     """
     # Read and parse DESCRIPTION.md
     title, body = _read_and_parse_description()
@@ -533,6 +544,11 @@ def create_new_pr(
             for line in body_preview.split('\n')[:10]:
                 err(f"    {line}")
     else:
+        # Resolve (and verify) the alternate author identity before opening the
+        # PR. None → open as the default `gh` account (unchanged behavior).
+        identity = resolve_identity(as_login)
+        bot_env = identity.env() if identity else None
+
         cmd = ['gh', 'pr', 'create',
                '-R', f'{owner}/{repo}',
                '--title', title,
@@ -551,7 +567,7 @@ def create_new_pr(
             cmd.append('--web')
 
         try:
-            output = proc.text(*cmd, log=None).strip()
+            output = proc.text(*cmd, env=bot_env, log=None).strip()
 
             if use_web_editor:
                 # Web editor mode: wait for user to finish editing in browser
@@ -588,7 +604,7 @@ def create_new_pr(
                             pass
 
                         # Finalize: rename file, commit, rename directory
-                        _finalize_created_item(owner, repo, pr_number, pr_url, 'pr')
+                        _finalize_created_item(owner, repo, pr_number, pr_url, 'pr', as_login)
                     else:
                         err("Warning: Could not find newly created PR")
                         err("You may need to run 'ghpr pull' to sync with GitHub")
@@ -628,7 +644,7 @@ def create_new_pr(
                         pass
 
                     # Finalize: rename file, commit, rename directory
-                    _finalize_created_item(owner, repo, pr_number, output, 'pr')
+                    _finalize_created_item(owner, repo, pr_number, output, 'pr', as_login)
                 else:
                     err(f"Created PR: {output}")
         except Exception as e:
@@ -640,6 +656,7 @@ def create_new_issue(
     repo_arg: str | None,
     yes: int,
     dry_run: bool,
+    as_login: str | None = None,
 ) -> None:
     """Create a new Issue from DESCRIPTION.md.
 
@@ -647,6 +664,7 @@ def create_new_issue(
         yes: 0 = open web editor during creation (default)
              1 = skip prompt, create then open result
              2+ = skip all, create silently
+        as_login: Alternate GitHub login to open the issue as (see `identity.py`).
     """
     # Read and parse DESCRIPTION.md
     title, body = _read_and_parse_description()
@@ -665,6 +683,11 @@ def create_new_issue(
             for line in body_preview.split('\n')[:10]:
                 err(f"    {line}")
     else:
+        # Resolve (and verify) the alternate author identity before opening the
+        # issue. None → open as the default `gh` account (unchanged behavior).
+        identity = resolve_identity(as_login)
+        bot_env = identity.env() if identity else None
+
         cmd = ['gh', 'issue', 'create',
                '-R', f'{owner}/{repo}',
                '--title', title,
@@ -678,7 +701,7 @@ def create_new_issue(
             cmd.append('--web')
 
         try:
-            output = proc.text(*cmd, log=None).strip()
+            output = proc.text(*cmd, env=bot_env, log=None).strip()
 
             if use_web_editor:
                 # Web editor mode: wait for user to finish editing in browser
@@ -702,7 +725,7 @@ def create_new_issue(
                         err(f"Found issue #{issue_number}: {issue_url}")
 
                         # Finalize: rename file, commit, rename directory
-                        _finalize_created_item(owner, repo, issue_number, issue_url, 'issue')
+                        _finalize_created_item(owner, repo, issue_number, issue_url, 'issue', as_login)
                     else:
                         err("Warning: Could not find newly created issue")
                         err("You may need to run 'ghpr pull' to sync with GitHub")
@@ -727,7 +750,7 @@ def create_new_issue(
                         proc.run('gh', 'issue', 'view', issue_number, '--web', '-R', f'{owner}/{repo}', log=None)
 
                     # Finalize: rename file, commit, rename directory
-                    _finalize_created_item(owner, repo, issue_number, output, 'issue')
+                    _finalize_created_item(owner, repo, issue_number, output, 'issue', as_login)
                 else:
                     err(f"Created issue: {output}")
         except Exception as e:
@@ -749,6 +772,7 @@ def register(cli):
 
     # Register create command
     @cli.command(name='create')
+    @opt('-a', '--as', 'as_login', help='Open the PR/issue + edit its body as this GitHub login (gist + reads stay default); also $GHPR_AS / `git config pr.as`')
     @opt('-y', '--yes', count=True, default=0, help='Skip web editor: -y = create via API then view, -yy = create silently (default: interactive web editor)')
     @opt('-r', '--repo', help='Repository (owner/repo format, default: auto-detect)')
     @flag('-n', '--dry-run', help='Show what would be done without creating')
@@ -757,6 +781,6 @@ def register(cli):
     @flag('-d', '--draft', help='Create as draft PR (requires -y; incompatible with web editor)')
     @opt('-b', '--base', help='Base branch (default: repo default branch)')
     @arg('path', required=False)
-    def create_cmd(yes, repo, dry_run, issue, head, draft, base, path):
+    def create_cmd(as_login, yes, repo, dry_run, issue, head, draft, base, path):
         """Create a PR or Issue from a draft directory (default: cwd; PATH=slug → gh/drafts/<slug>)."""
-        create(head, base, draft, issue, repo, yes, dry_run, path)
+        create(head, base, draft, issue, repo, yes, dry_run, path, as_login)

@@ -16,6 +16,7 @@ from ..comments import read_comment_file, write_comment_file, get_comment_id_fro
 from ..config import get_pr_info_from_path
 from ..files import read_description_from_git, get_expected_description_filename, process_images_in_description
 from ..gist import add_gist_footer, create_gist, GIST_URL_WITH_USER_PATTERN, DEFAULT_GIST_REMOTE, find_gist_remote
+from ..identity import resolve_identity
 from ..patterns import extract_title_from_first_line
 from ..refs import REMOTE_REF, read_remote_ref, set_remote_ref
 from ..render import render_comment_diff, render_unified_diff
@@ -124,8 +125,21 @@ def push(
     no_comments: bool,
     force_others: bool,
     no_gate: bool = False,
+    as_login: str | None = None,
 ) -> None:
-    """Push local description and comments to the PR/Issue."""
+    """Push local description and comments to the PR/Issue.
+
+    When an alternate identity is selected (`as_login` / `$GHPR_AS` /
+    `git config pr.as`), the author-visible *writes* — the description/body
+    edit, comment posts/edits, and review-thread replies/resolves — run as that
+    account, while the gist mirror and all reads stay on the default `gh`
+    account. See `identity.py`.
+    """
+
+    # Resolve (and verify) an alternate author identity, if configured. None →
+    # unchanged behavior (act as the active `gh` account).
+    identity = resolve_identity(as_login)
+    bot_env = identity.env() if identity else None
 
     # Get item info from current directory
     owner, repo, number = get_pr_info_from_path()
@@ -318,7 +332,7 @@ def push(
             cmd.extend(['--body-file', body_file])
 
         try:
-            proc.run(*cmd, log=None)
+            proc.run(*cmd, env=bot_env, log=None)
             if body is not None:
                 unlink(body_file)  # Clean up temp file
             err(f"Successfully updated {item_label}")
@@ -341,11 +355,11 @@ def push(
     if not no_comments:
         if dry_run:
             # In dry-run mode, just show the diff
-            current_user = get_current_github_user()
+            current_user = identity.login if identity else get_current_github_user()
             render_comment_diff(owner, repo, number, item_type, use_color=use_color, dry_run=True, current_user=current_user)
         else:
             err("Checking for comment changes...")
-            current_user = get_current_github_user()
+            current_user = identity.login if identity else get_current_github_user()
 
             # First, handle new draft comments (new*.md files from HEAD)
             # Get list of files in HEAD
@@ -382,6 +396,7 @@ def push(
                             '-X', 'POST',
                             f'repos/{owner}/{repo}/issues/{number}/comments',
                             '-F', f'body=@{temp_file}',
+                            env=bot_env,
                             log=False
                         )
                         comment_id = str(result['id'])
@@ -472,7 +487,7 @@ def push(
 
                             proc.run('gh', 'api', '-X', 'PATCH',
                                     f'repos/{owner}/{repo}/issues/comments/{comment_id}',
-                                    '-F', f'body=@{temp_file}', log=None)
+                                    '-F', f'body=@{temp_file}', env=bot_env, log=None)
                             unlink(temp_file)
                             err(f"Updated comment {comment_id}")
                             comments_pushed += 1
@@ -511,12 +526,12 @@ def push(
     # Push review-thread changes (PR-only, default enabled, skip if --no-comments)
     if not no_comments and item_type == 'pr':
         from .. import reviews
-        current_user = get_current_github_user()
+        current_user = identity.login if identity else get_current_github_user()
         use_color = sys.stderr.isatty()
         if dry_run:
             reviews.diff(owner, repo, number, use_color=use_color, current_user=current_user)
         else:
-            reviews.push(owner, repo, number, current_user=current_user, force_others=force_others)
+            reviews.push(owner, repo, number, current_user=current_user, force_others=force_others, env=bot_env)
 
     # GitHub now matches HEAD, so HEAD is the base future pulls reconcile against
     # (see ghpr/refs.py). Only advance the ref when the push was complete: if
@@ -750,6 +765,7 @@ def register(cli):
     """Register command with CLI."""
 
     @cli.command()
+    @opt('-a', '--as', 'as_login', help='Post/edit comments + review replies as this GitHub login (gist + reads stay default); also $GHPR_AS / `git config pr.as`')
     @flag('-C', '--force-others', help='Allow pushing edits to other users\' comments (may fail at API level)')
     @flag('-G', '--no-gate', help='Push even if GitHub changed since the last fetch (discards the remote change)')
     @flag('--no-comments', help='Skip pushing comment changes')
@@ -760,6 +776,6 @@ def register(cli):
     @opt('-f', '--footer', count=True, help='Footer level: -f = hidden footer, -ff = visible footer')
     @flag('-n', '--dry-run', help='Show what would be done without making changes')
     @flag('-g', '--gist', help='Also sync to gist')
-    def push_cmd(force_others, no_gate, no_comments, gist_private, images, open_browser, no_footer, footer, dry_run, gist):
+    def push_cmd(as_login, force_others, no_gate, no_comments, gist_private, images, open_browser, no_footer, footer, dry_run, gist):
         """Push local changes to GitHub PR/Issue and gist."""
-        push(gist, dry_run, footer, no_footer, open_browser, images, gist_private, no_comments, force_others, no_gate)
+        push(gist, dry_run, footer, no_footer, open_browser, images, gist_private, no_comments, force_others, no_gate, as_login)

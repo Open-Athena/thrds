@@ -154,22 +154,32 @@ def list_review_threads(owner: str, repo: str, number: str) -> list[dict]:
     return threads
 
 
-def reply_to_review_comment(owner: str, repo: str, number: str, comment_id: str, body_file: str) -> dict:
-    """POST a threaded reply to an existing review comment. Returns the new comment dict."""
+def reply_to_review_comment(owner: str, repo: str, number: str, comment_id: str, body_file: str, env: dict | None = None) -> dict:
+    """POST a threaded reply to an existing review comment. Returns the new comment dict.
+
+    `env` (when set) overrides the subprocess environment — e.g. `GH_TOKEN` for
+    an alternate author identity (see `identity.py`).
+    """
     return proc.json(
         'gh', 'api', '-X', 'POST',
         f'repos/{owner}/{repo}/pulls/{number}/comments/{comment_id}/replies',
         '-F', f'body=@{body_file}',
+        env=env,
         log=False,
     )
 
 
-def update_review_comment(owner: str, repo: str, comment_id: str, body_file: str) -> dict:
-    """PATCH an existing review comment's body. Returns the updated comment dict."""
+def update_review_comment(owner: str, repo: str, comment_id: str, body_file: str, env: dict | None = None) -> dict:
+    """PATCH an existing review comment's body. Returns the updated comment dict.
+
+    `env` (when set) overrides the subprocess environment — e.g. `GH_TOKEN` for
+    an alternate author identity (see `identity.py`).
+    """
     return proc.json(
         'gh', 'api', '-X', 'PATCH',
         f'repos/{owner}/{repo}/pulls/comments/{comment_id}',
         '-F', f'body=@{body_file}',
+        env=env,
         log=False,
     )
 
@@ -191,23 +201,33 @@ mutation($threadId: ID!) {
 '''
 
 
-def resolve_review_thread(thread_node_id: str) -> dict:
-    """Resolve a review thread via GraphQL. Returns the updated thread dict."""
+def resolve_review_thread(thread_node_id: str, env: dict | None = None) -> dict:
+    """Resolve a review thread via GraphQL. Returns the updated thread dict.
+
+    `env` (when set) overrides the subprocess environment — e.g. `GH_TOKEN` for
+    an alternate author identity (see `identity.py`).
+    """
     data = proc.json(
         'gh', 'api', 'graphql',
         '-f', f'query={_RESOLVE_MUTATION}',
         '-f', f'threadId={thread_node_id}',
+        env=env,
         log=False,
     )
     return data['data']['resolveReviewThread']['thread']
 
 
-def unresolve_review_thread(thread_node_id: str) -> dict:
-    """Unresolve a review thread via GraphQL. Returns the updated thread dict."""
+def unresolve_review_thread(thread_node_id: str, env: dict | None = None) -> dict:
+    """Unresolve a review thread via GraphQL. Returns the updated thread dict.
+
+    `env` (when set) overrides the subprocess environment — e.g. `GH_TOKEN` for
+    an alternate author identity (see `identity.py`).
+    """
     data = proc.json(
         'gh', 'api', 'graphql',
         '-f', f'query={_UNRESOLVE_MUTATION}',
         '-f', f'threadId={thread_node_id}',
+        env=env,
         log=False,
     )
     return data['data']['unresolveReviewThread']['thread']

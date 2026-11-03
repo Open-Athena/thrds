@@ -348,22 +348,22 @@ def _git_tracked(path: Path) -> bool:
     return proc.check('git', 'ls-files', '--error-unmatch', str(path), log=None)
 
 
-def _patch_body(owner: str, repo: str, comment_id: str, body: str) -> None:
+def _patch_body(owner: str, repo: str, comment_id: str, body: str, env: dict | None = None) -> None:
     with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tf:
         tf.write(body)
         body_file = tf.name
     try:
-        update_review_comment(owner, repo, comment_id, body_file)
+        update_review_comment(owner, repo, comment_id, body_file, env=env)
     finally:
         unlink(body_file)
 
 
-def _post_reply(owner: str, repo: str, number: str, head_id: str, body: str) -> dict:
+def _post_reply(owner: str, repo: str, number: str, head_id: str, body: str, env: dict | None = None) -> dict:
     with NamedTemporaryFile(mode='w', suffix='.md', delete=False) as tf:
         tf.write(body)
         body_file = tf.name
     try:
-        return reply_to_review_comment(owner, repo, number, head_id, body_file)
+        return reply_to_review_comment(owner, repo, number, head_id, body_file, env=env)
     finally:
         unlink(body_file)
 
@@ -381,8 +381,14 @@ def push(
     dry_run: bool = False,
     current_user: str | None = None,
     force_others: bool = False,
+    env: dict | None = None,
 ) -> None:
-    """Push local review-thread edits/replies/resolve-toggles back to GitHub."""
+    """Push local review-thread edits/replies/resolve-toggles back to GitHub.
+
+    `env` (when set) is applied to every write subprocess (reply/edit/resolve),
+    e.g. to author as an alternate `GH_TOKEN` identity. Reads run with the
+    ambient environment.
+    """
     groups = scan_local_threads()
     if not groups:
         return
@@ -431,10 +437,10 @@ def push(
                     resolves += 1
                 else:
                     if local_resolved:
-                        resolve_review_thread(node_id)
+                        resolve_review_thread(node_id, env=env)
                         err(f"Resolved thread {head_id}")
                     else:
-                        unresolve_review_thread(node_id)
+                        unresolve_review_thread(node_id, env=env)
                         err(f"Unresolved thread {head_id}")
                     resolves += 1
 
@@ -465,7 +471,7 @@ def push(
             if dry_run:
                 err(f"[DRY-RUN] Would edit review comment {cid}")
             else:
-                _patch_body(owner, repo, cid, body)
+                _patch_body(owner, repo, cid, body, env=env)
                 err(f"Updated review comment {cid}")
             edits_pushed += 1
 
@@ -483,7 +489,7 @@ def push(
                 err(f"[DRY-RUN] Would post reply from {draft} to thread {head_id}")
                 replies_posted += 1
                 continue
-            result = _post_reply(owner, repo, number, head_id, body)
+            result = _post_reply(owner, repo, number, head_id, body, env=env)
             new_id = str(result['id'])
             author = result['user']['login']
             posted_body = (result.get('body') or '').replace('\r\n', '\n')
