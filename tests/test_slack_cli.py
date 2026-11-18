@@ -68,8 +68,8 @@ class CrudSpy:
     def list_channels_by_name(self) -> dict[str, str]:
         return dict(self.channels_by_name)
 
-    def list_channel_history(self, channel: str, limit: int = 20) -> list[dict]:
-        self.history_calls.append({"channel": channel, "limit": limit})
+    def list_channel_history(self, channel: str, limit: int | None = 20, *, include_replies: bool = False) -> list[dict]:
+        self.history_calls.append({"channel": channel, "limit": limit, "include_replies": include_replies})
         return list(self.history_returns)
 
     def list_thread_raw(self, channel: str, thread_ts: str) -> list[dict]:
@@ -152,7 +152,7 @@ def test_history_default_limit_and_table_output(spy):
     ]
     result = _run("history", "C_TEST")
     assert result.exit_code == 0, (result.output, result.stderr)
-    assert spy.history_calls[-1] == {"channel": "C_TEST", "limit": 20}
+    assert spy.history_calls[-1] == {"channel": "C_TEST", "limit": 20, "include_replies": False}
     # Column width padded to longest sender ("GCS usage — 2026" = 16 chars).
     assert result.output.rstrip().split("\n") == [
         "1.000000  U0AB1CD           hi",
@@ -162,7 +162,11 @@ def test_history_default_limit_and_table_output(spy):
 
 def test_history_respects_limit_flag(spy):
     _run("history", "-n", "5", "C_TEST")
-    assert spy.history_calls[-1] == {"channel": "C_TEST", "limit": 5}
+    _run("history", "-n", "0", "-r", "C_TEST")
+    assert spy.history_calls[-2:] == [
+        {"channel": "C_TEST", "limit": 5, "include_replies": False},
+        {"channel": "C_TEST", "limit": None, "include_replies": True},
+    ]
 
 
 def test_history_json_emits_raw_dicts(spy):

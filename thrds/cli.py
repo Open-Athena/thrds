@@ -2514,12 +2514,13 @@ def slack_recover(
 
 @slack_cli.command("history")
 @click.option("-j", "--json", "as_json", is_flag=True, help="Emit raw message dicts as JSON.")
-@click.option("-n", "--limit", type=int, default=20, help="Max messages to fetch (default 20).")
+@click.option("-n", "--limit", type=int, default=20, help="Max messages to fetch (default 20; 0: all).")
+@click.option("-r", "--replies", is_flag=True, help="Follow each threaded message with its replies.")
 @click.argument("channel")
-def slack_history(as_json: bool, limit: int, channel: str):
+def slack_history(as_json: bool, limit: int, replies: bool, channel: str):
     """List the last N messages in CHANNEL (default 20)."""
     client = _crud_client(channel)
-    msgs = client.list_channel_history(client.channel, limit=limit)
+    msgs = client.list_channel_history(client.channel, limit=limit or None, include_replies=replies)
     if as_json:
         import json as _json
         click.echo(_json.dumps(msgs, indent=2))

@@ -83,6 +83,7 @@ You can even start a thread by writing one in the staging channel: a top-level m
 
 ```bash
 thrds slack history #foo -n 10           # last 10 messages (ts, sender, text)
+thrds slack history #foo -n 0 -r -j      # all of history, thread replies included, as JSON (with metadata)
 thrds slack thread  #foo 1783.1          # OP + replies as a table (`-j` = JSON)
 thrds slack rm      #foo 1783.1 1783.2   # delete msg(s); `-f` = orphans_ok
 thrds slack post    #foo '*bold*'        # raw mrkdwn (`-m` = convert md first)

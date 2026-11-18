@@ -6,8 +6,9 @@ import random
 import re
 import time
 import urllib.request
-from collections.abc import Iterable, Sequence
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
+from itertools import islice
 from pathlib import Path
 from urllib.error import HTTPError
 from urllib.parse import urlencode
@@ -81,6 +82,9 @@ SLACK_MESSAGE_LIMIT = 4000
 # A `section` block's text maxes out below the 4000 a plain `text` message
 # allows, so a body in between finalizes as text rather than being split.
 SLACK_SECTION_LIMIT = 3000
+# Page size for paginated `conversations.history` / `.replies` reads: Slack
+# recommends ≤200 (it allows up to 999 but may return fewer).
+HISTORY_PAGE_SIZE = 200
 
 
 _UPLOAD_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif'}
@@ -269,26 +273,94 @@ class SlackClient:
             return None
         return self._metadata_by_content.get(content)
 
+    def _paginate(
+        self,
+        endpoint: str,
+        params: dict,
+        page_size: int = HISTORY_PAGE_SIZE,
+    ) -> Iterator[dict]:
+        """Yield ``messages`` across every page of a cursor-paginated read.
+
+        Always asks for ``include_all_metadata``, so each dict carries its
+        ``metadata`` (``event_type`` / ``event_payload``) when it has one.
+        """
+        cursor: str | None = None
+        while True:
+            data = {**params, "limit": page_size, "include_all_metadata": True}
+            if cursor:
+                data["cursor"] = cursor
+            result = self._request(endpoint, data, method="GET")
+            yield from result.get("messages", [])
+            cursor = (result.get("response_metadata") or {}).get("next_cursor")
+            if not cursor:
+                return
+
+    def iter_channel_history(
+        self,
+        channel: str | None = None,
+        *,
+        oldest: str | None = None,
+        latest: str | None = None,
+        include_replies: bool = False,
+        page_size: int = HISTORY_PAGE_SIZE,
+    ) -> Iterator[dict]:
+        """Every message in ``channel`` (default ``self.channel``), newest first, as raw Slack dicts.
+
+        Pages through ``conversations.history`` back to ``oldest`` (and from
+        ``latest``, both Slack ts strings). With ``include_replies``, each
+        top-level message that has replies is followed by its thread's
+        replies (oldest first, parent excluded), which history alone never
+        returns: the read an audit/repair tool for a bot that posts into
+        threads needs. Lazy, so a consumer that stops early stops paging.
+        """
+        channel = channel or self.channel
+        params: dict = {"channel": channel}
+        if oldest is not None:
+            params["oldest"] = oldest
+        if latest is not None:
+            params["latest"] = latest
+        for m in self._paginate("conversations.history", params, page_size):
+            yield m
+            if include_replies and m.get("reply_count", 0) > 0:
+                yield from (
+                    r for r in self.iter_thread_raw(channel, m["ts"])
+                    if r.get("ts") != m["ts"]
+                )
+
     def list_channel_history(
         self,
         channel: str,
-        limit: int = 20,
+        limit: int | None = 20,
+        *,
+        oldest: str | None = None,
+        latest: str | None = None,
+        include_replies: bool = False,
     ) -> list[dict]:
-        """Fetch the last ``limit`` messages from ``channel`` as raw Slack dicts.
+        """Fetch the last ``limit`` messages (``None``: all) from ``channel`` as raw Slack dicts.
 
         Low-level accessor for CRUD/scripting (``thrds slack history``) —
         returns unwrapped dicts (``ts`` / ``user`` / ``bot_id`` / ``username``
-        / ``text`` / …) rather than typed `Message`s. ``text`` is the wire
-        mrkdwn as Slack returns it (no ``to_markdown`` roundtrip); this
-        matches the "raw by default" ethos of the CRUD verbs. Takes
+        / ``text`` / ``metadata`` / …) rather than typed `Message`s. ``text``
+        is the wire mrkdwn as Slack returns it (no ``to_markdown`` roundtrip);
+        this matches the "raw by default" ethos of the CRUD verbs. Takes
         ``channel`` explicitly (like `scan_thrds_metadata`) so it can be
-        called without stomping ``self.channel``.
+        called without stomping ``self.channel``. Paginates; see
+        `iter_channel_history` for ``oldest`` / ``latest`` /
+        ``include_replies`` (replies count toward ``limit``).
         """
-        result = self._request("conversations.history", {
-            "channel": channel,
-            "limit": limit,
-        }, method="GET")
-        return result.get("messages", [])
+        page_size = HISTORY_PAGE_SIZE if limit is None else max(1, min(limit, HISTORY_PAGE_SIZE))
+        it = self.iter_channel_history(
+            channel,
+            oldest=oldest,
+            latest=latest,
+            include_replies=include_replies,
+            page_size=page_size,
+        )
+        return list(it if limit is None else islice(it, limit))
+
+    def iter_thread_raw(self, channel: str, thread_ts: str) -> Iterator[dict]:
+        """A thread's messages (OP first, then replies), paging through ``conversations.replies``."""
+        return self._paginate("conversations.replies", {"channel": channel, "ts": thread_ts})
 
     def list_thread_raw(
         self,
@@ -301,13 +373,39 @@ class SlackClient:
         typed `Message` wrapping, no ``to_markdown`` conversion on wire text)
         for CRUD/scripting via ``thrds slack thread``. The typed
         `list_messages` counterpart is what `sync()` consumes and
-        converts back to local markdown.
+        converts back to local markdown. Paginates, so a thread past one
+        page comes back whole.
         """
-        result = self._request("conversations.replies", {
-            "channel": channel,
-            "ts": thread_ts,
-        }, method="GET")
-        return result.get("messages", [])
+        return list(self.iter_thread_raw(channel, thread_ts))
+
+    def find_by_metadata(
+        self,
+        event_type: str,
+        match: Callable[[dict], bool] = lambda payload: True,
+        *,
+        channel: str | None = None,
+        thread_ts: str | None = None,
+        oldest: str | None = None,
+        include_replies: bool = False,
+    ) -> dict | None:
+        """The first message tagged ``metadata.event_type == event_type`` whose payload satisfies ``match``.
+
+        Searches the thread at ``thread_ts`` when given, else the channel's
+        history (newest first) back to ``oldest``, descending into threads
+        when ``include_replies``. How a bot finds "its" message without a
+        database. Returns the raw Slack dict, or ``None``.
+        """
+        channel = channel or self.channel
+        messages = (
+            self.iter_thread_raw(channel, thread_ts)
+            if thread_ts is not None
+            else self.iter_channel_history(channel, oldest=oldest, include_replies=include_replies)
+        )
+        for m in messages:
+            md = m.get("metadata") or {}
+            if md.get("event_type") == event_type and match(md.get("event_payload") or {}):
+                return m
+        return None
 
     @staticmethod
     def _message_markdown(m: dict) -> str:
@@ -367,10 +465,7 @@ class SlackClient:
         return body
 
     def list_messages(self, thread_id: str) -> list[Message]:
-        result = self._request("conversations.replies", {
-            "channel": self.channel,
-            "ts": thread_id,
-        }, method="GET")
+        raw = self.list_thread_raw(self.channel, thread_id)
         user_id, bot_id = self.bot_ids
         messages = [
             Message(
@@ -395,7 +490,7 @@ class SlackClient:
                 sender_username=m.get("username"),
                 sender_icon_url=_slack_icon_url(m),
             )
-            for m in result.get("messages", [])
+            for m in raw
         ]
         # In sync_linked mode, skip the OP (thread parent) — it's managed separately
         if self._skip_op and messages:
@@ -427,6 +522,7 @@ class SlackClient:
         images: Sequence[Image] = (),
         raw: bool | None = None,
         broadcast: bool = False,
+        metadata: dict | None = None,
     ) -> Message:
         """
         Sender fields resolve message override → client default → unset.
@@ -452,6 +548,11 @@ class SlackClient:
         ignores the flag on a top-level message, so ``broadcast=True`` without
         one is a caller bug and **raises** ``ValueError``.
         See `specs/done/slack-reply-broadcast.md`.
+
+        ``metadata`` is Slack message metadata (``{"event_type": …,
+        "event_payload": {…}}``) sent with the post, for consumers that tag
+        their messages to find them again (`find_by_metadata`). It wins over
+        the per-content metadata `sync` sets.
         """
         if broadcast and thread_id is None:
             raise ValueError(
@@ -511,7 +612,7 @@ class SlackClient:
             data["thread_ts"] = thread_id
             if broadcast:
                 data["reply_broadcast"] = True
-        md = self._metadata_for(content)
+        md = metadata if metadata is not None else self._metadata_for(content)
         if md is not None:
             data["metadata"] = md
         result = self._request("chat.postMessage", data)
@@ -526,6 +627,7 @@ class SlackClient:
         *,
         images: Sequence[Image] = (),
         raw: bool | None = None,
+        metadata: dict | None = None,
     ) -> Message:
         """Edit ``message_id``'s text to ``content``.
 
@@ -536,6 +638,9 @@ class SlackClient:
         else the boolean overrides. When resolved to ``True``, ``content``
         is sent as wire ``text`` verbatim (no ``to_slack()`` conversion).
         See `specs/done/raw-mrkdwn-passthrough.md`.
+
+        ``metadata`` mirrors `post()`: sent with the update (Slack keeps a
+        message's existing metadata when an update omits it).
         """
         content = self._fold_images_into_content(content, images)
         if len(content) > SLACK_MESSAGE_LIMIT:
@@ -560,7 +665,7 @@ class SlackClient:
             # place unless told otherwise, so an edit that drops the doc's
             # image lines must explicitly clear the live image blocks.
             data["blocks"] = []
-        md = self._metadata_for(content)
+        md = metadata if metadata is not None else self._metadata_for(content)
         if md is not None:
             data["metadata"] = md
         self._request("chat.update", data)
