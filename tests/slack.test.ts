@@ -84,7 +84,7 @@ describe("SlackClient.list — editable detection", () => {
     });
     const messages = await client.list("1000.0");
     expect(messages).toEqual([
-      { id: "1000.0", content: "from bot", editable: true },
+      { id: "1000.0", content: "from bot", editable: true, botId: "B_BOT" },
     ]);
   });
 

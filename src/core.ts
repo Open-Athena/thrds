@@ -1,3 +1,5 @@
+import { hash53, stableStringify } from "./hash";
+
 export type ActionType = "SKIP" | "EDIT" | "POST" | "DELETE";
 
 export class EditRateLimited extends Error {
@@ -24,18 +26,77 @@ export interface Action {
   type: ActionType;
   index: number;
   messageId?: string;
+  /** The desired message's text. */
   content?: string;
   priorContent?: string;
 }
 
+/** Who a message is posted as. Slack applies it at post time only: an edit keeps the original sender. */
+export interface Sender {
+  username?: string;
+  /** An https image URL Slack can fetch. Wins over `iconEmoji`. */
+  iconUrl?: string;
+  iconEmoji?: string;
+}
+
+export interface MessageMetadata {
+  event_type: string;
+  event_payload: Record<string, unknown>;
+}
+
+/** A message with everything a post can carry. A bare string is shorthand for `{ text }`. */
+export interface Msg extends Sender {
+  /** The message text; with `blocks`, Slack's notification / fallback text. */
+  text: string;
+  blocks?: unknown[];
+  metadata?: MessageMetadata;
+  /** Also show a thread reply in the channel. Applies at post time. */
+  replyBroadcast?: boolean;
+}
+
+export type MsgLike = string | Msg;
+
+export const toMsg = (m: MsgLike): Msg => (typeof m === "string" ? { text: m } : m);
+
+/** The `metadata.event_payload` field a sent message's content hash is stamped into. */
+export const THRDS_HASH = "thrds_hash";
+
+/** Hash of what a re-send can change: text, blocks and metadata (not the sender, which Slack fixes at post). */
+export function msgHash(m: MsgLike): string {
+  const msg = toMsg(m);
+  const payload = msg.metadata ? { ...msg.metadata.event_payload } : undefined;
+  if (payload) delete payload[THRDS_HASH];
+  return hash53(
+    stableStringify({
+      text: msg.text,
+      blocks: msg.blocks,
+      metadata: msg.metadata ? { event_type: msg.metadata.event_type, event_payload: payload } : undefined,
+    }),
+  );
+}
+
+/** Whether `m` is compared by a stamped hash rather than its text (it has blocks or metadata). */
+export const isRich = (m: MsgLike): boolean =>
+  typeof m !== "string" && (m.blocks !== undefined || m.metadata !== undefined);
+
+/**
+ * How `sync` compares a desired message with a live one. Plain text compares as itself (so threads written by the
+ * Python `thrds` reconcile the same way); a rich message as `thrds:<hash>`, because Slack rewrites blocks on readback.
+ */
+export const contentKey = (m: MsgLike): string =>
+  isRich(m) ? `thrds:${msgHash(m)}` : toMsg(m).text;
+
 export interface Thread {
-  messages: string[];
+  messages: MsgLike[];
 }
 
 export interface Message {
   id: string;
+  /** The message text. */
   content: string;
   editable?: boolean;
+  /** Comparable content as read back (`contentKey`); `content` when absent. */
+  key?: string;
 }
 
 export interface SyncResult {
@@ -54,8 +115,8 @@ export interface SyncOptions {
 
 export interface ThreadClient {
   list(threadId: string): Promise<Message[]>;
-  post(content: string, threadId?: string): Promise<Message>;
-  edit(messageId: string, content: string): Promise<Message>;
+  post(msg: MsgLike, threadId?: string): Promise<Message>;
+  edit(messageId: string, msg: MsgLike): Promise<Message>;
   delete(messageId: string): Promise<void>;
 }
 
@@ -111,12 +172,12 @@ export async function sync(
   for (let i = 0; i < overlap; i++) {
     const ex = existing[i]!;
     const want = desired.messages[i]!;
-    if (ex.content === want) {
+    if ((ex.key ?? ex.content) === contentKey(want)) {
       actions.push({
         type: "SKIP",
         index: i,
         messageId: ex.id,
-        content: want,
+        content: toMsg(want).text,
       });
       messageIds.push(ex.id);
       continue;
@@ -125,7 +186,7 @@ export async function sync(
       type: "EDIT",
       index: i,
       messageId: ex.id,
-      content: want,
+      content: toMsg(want).text,
       priorContent: ex.content,
     });
     if (dryRun) {
@@ -160,7 +221,7 @@ export async function sync(
     }
     for (let j = repostFrom; j < M; j++) {
       const want = desired.messages[j]!;
-      actions.push({ type: "POST", index: j, content: want });
+      actions.push({ type: "POST", index: j, content: toMsg(want).text });
       await doPace();
       const result = await client.post(want, threadId);
       messageIds.push(result.id);
@@ -178,7 +239,7 @@ export async function sync(
     let start = N;
     if (threadId === undefined && N === 0) {
       const want = desired.messages[0]!;
-      actions.push({ type: "POST", index: 0, content: want });
+      actions.push({ type: "POST", index: 0, content: toMsg(want).text });
       if (dryRun) {
         messageIds.push("<new>");
         finalThreadId = "<new>";
@@ -192,7 +253,7 @@ export async function sync(
     }
     for (let i = start; i < M; i++) {
       const want = desired.messages[i]!;
-      actions.push({ type: "POST", index: i, content: want });
+      actions.push({ type: "POST", index: i, content: toMsg(want).text });
       if (dryRun) {
         messageIds.push("<new>");
       } else {
