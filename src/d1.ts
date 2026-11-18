@@ -116,3 +116,30 @@ export function d1AvatarStore(db: D1Like, options: { table?: string } = {}): Ava
     },
   };
 }
+
+/** A synchronous SQLite handle: `node:sqlite`'s `DatabaseSync`, or better-sqlite3's `Database`. */
+export interface SqliteLike {
+  prepare(sql: string): {
+    all(...params: never[]): unknown[];
+    run(...params: never[]): { changes: number | bigint };
+  };
+}
+
+/**
+ * A `D1Like` over a local SQLite database, so `d1Store` / `d1AvatarStore` (leases included) run on a Node host or in
+ * tests: `d1Store(sqliteD1(new DatabaseSync("bot.db")))`. Create the tables with `SCHEMA` first.
+ */
+export function sqliteD1(db: SqliteLike): D1Like {
+  const stmt = (sql: string, params: unknown[] = []): D1Statement => ({
+    bind: (...args) => stmt(sql, args),
+    async first<T>(column?: string) {
+      const row = db.prepare(sql).all(...(params as never[]))[0] as Record<string, unknown> | undefined;
+      if (!row) return null;
+      return (column ? row[column] : { ...row }) as T;
+    },
+    async run() {
+      return { meta: { changes: Number(db.prepare(sql).run(...(params as never[])).changes) } };
+    },
+  });
+  return { prepare: (sql) => stmt(sql) };
+}

@@ -48,29 +48,40 @@ export {
   webClientTransport,
 } from "./slack";
 
-export type { Block, ButtonOptions } from "./mrkdwn";
+export type { Block, ButtonOptions, RichStyle } from "./mrkdwn";
 export {
+  PRIVATE_METADATA_MAX,
   actions,
   bound,
   button,
   context,
   date,
+  datePicker,
   decodePrivateMetadata,
   divider,
   encodePrivateMetadata,
   escape,
+  fitsPrivateMetadata,
   header,
   image,
   imageElement,
+  input,
   link,
   mention,
+  modal,
   mrkdwnText,
+  option,
   plainText,
+  plainTextInput,
+  rich,
   section,
+  staticSelect,
+  usersSelect,
+  withoutImages,
 } from "./mrkdwn";
 
-export type { MessageRef } from "./permalink";
-export { buildPermalink, parsePermalink } from "./permalink";
+export type { FoundPermalink, MessageRef } from "./permalink";
+export { buildPermalink, parsePermalink, permalinksIn, withoutPermalinks } from "./permalink";
 
 export { hash53, stableStringify } from "./hash";
 

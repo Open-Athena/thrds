@@ -33,27 +33,39 @@
   "exports": {
     ".": {
       "types": "./dist/index.d.ts",
-      "import": "./dist/index.js"
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
     },
     "./avatar": {
       "types": "./dist/avatar.d.ts",
-      "import": "./dist/avatar.js"
+      "import": "./dist/avatar.js",
+      "default": "./dist/avatar.js"
     },
     "./d1": {
       "types": "./dist/d1.d.ts",
-      "import": "./dist/d1.js"
+      "import": "./dist/d1.js",
+      "default": "./dist/d1.js"
     },
     "./kv": {
       "types": "./dist/kv.d.ts",
-      "import": "./dist/kv.js"
+      "import": "./dist/kv.js",
+      "default": "./dist/kv.js"
     },
     "./receiver": {
       "types": "./dist/receiver.d.ts",
-      "import": "./dist/receiver.js"
-    }
+      "import": "./dist/receiver.js",
+      "default": "./dist/receiver.js"
+    },
+    "./testing": {
+      "types": "./dist/testing.d.ts",
+      "import": "./dist/testing.js",
+      "default": "./dist/testing.js"
+    },
+    "./schema/thrds.sql": "./schema/thrds.sql"
   },
   "files": [
     "dist",
+    "schema",
     "README.md",
     "LICENSE"
   ],

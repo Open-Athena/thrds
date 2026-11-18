@@ -7,9 +7,9 @@
 export const escape = (text: string): string =>
   text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-/** `<url|label>`; the label is escaped, and `|` / `>` can't appear unescaped in either part. */
+/** `<url|label>`; the label is escaped, and `|` / `<` / `>` can't appear unescaped in either part. */
 export function link(url: string, label?: string): string {
-  const href = url.replace(/\|/g, "%7C").replace(/>/g, "%3E");
+  const href = url.replace(/\|/g, "%7C").replace(/</g, "%3C").replace(/>/g, "%3E");
   return label === undefined ? `<${href}>` : `<${href}|${escape(label).replace(/\|/g, "¦")}>`;
 }
 
@@ -30,10 +30,20 @@ export function date(tsS: number, format: string, fallback: string, href?: strin
   return `<!date^${Math.floor(tsS)}^${format}${href ? `^${href}` : ""}|${escape(fallback)}>`;
 }
 
-/** Cut `text` to at most `max` characters (by code point, so no split emoji), ending in `ellipsis` when cut. */
-export function bound(text: string, max: number, ellipsis = "…"): string {
+/**
+ * Cut `text` to at most `max` characters (by code point, so no split emoji), ending in `ellipsis` when cut. With
+ * `atLine`, cut at the last line break past half the budget when there is one, ending in `\n…`.
+ */
+export function bound(text: string, max: number, options: string | { ellipsis?: string; atLine?: boolean } = {}): string {
+  const { ellipsis = "…", atLine = false } = typeof options === "string" ? { ellipsis: options } : options;
   const chars = [...text];
   if (chars.length <= max) return text;
+  if (atLine) {
+    const tail = `\n${ellipsis}`;
+    const room = Math.max(0, max - [...tail].length);
+    const cut = chars.slice(0, room).join("").lastIndexOf("\n");
+    if (cut >= 0 && [...text.slice(0, cut)].length >= room / 2) return text.slice(0, cut) + tail;
+  }
   const keep = Math.max(0, max - [...ellipsis].length);
   return chars.slice(0, keep).join("") + ellipsis;
 }
@@ -104,13 +114,19 @@ export function actions(elements: Block[], blockId?: string): Block {
   return block;
 }
 
+/** Slack's cap on a view's `private_metadata`. */
+export const PRIVATE_METADATA_MAX = 3000;
+
+/** Whether `value` fits in `private_metadata` as JSON (to degrade gracefully instead of throwing). */
+export const fitsPrivateMetadata = (value: unknown): boolean => JSON.stringify(value).length <= PRIVATE_METADATA_MAX;
+
 /**
- * Slack caps a view's `private_metadata` at 3000 characters. Encode JSON state for it, throwing (rather than letting
- * `views.open` fail opaquely) when it doesn't fit.
+ * Encode JSON state for a view's `private_metadata`, throwing (rather than letting `views.open` fail opaquely) when it
+ * doesn't fit.
  */
 export function encodePrivateMetadata(value: unknown): string {
   const s = JSON.stringify(value);
-  if (s.length > 3000) throw new RangeError(`private_metadata is ${s.length} chars; Slack's limit is 3000`);
+  if (s.length > PRIVATE_METADATA_MAX) throw new RangeError(`private_metadata is ${s.length} chars; Slack's limit is ${PRIVATE_METADATA_MAX}`);
   return s;
 }
 
@@ -118,3 +134,147 @@ export function decodePrivateMetadata<T = unknown>(s: string | undefined): T | n
   if (!s) return null;
   return JSON.parse(s) as T;
 }
+
+/**
+ * `msg` without image blocks or image accessories: the `fallback` to post when Slack rejects a message whose image it
+ * can't fetch yet (`invalid_blocks`), to be edited back in once it can.
+ */
+export function withoutImages<M extends { blocks?: unknown[] }>(msg: M): M {
+  if (!msg.blocks) return msg;
+  const blocks = msg.blocks
+    .filter((b) => (b as Block)["type"] !== "image")
+    .map((b) => {
+      const block = b as Block;
+      const accessory = block["accessory"] as Block | undefined;
+      if (accessory?.["type"] !== "image") return block;
+      const { accessory: _accessory, ...rest } = block;
+      return rest;
+    });
+  return { ...msg, blocks };
+}
+
+/* ---- modal inputs ---- */
+
+export const option = (text: string, value: string): Block => ({ text: plainText(text), value });
+
+/** An `input` block: a labeled form field around `element`. */
+export function input(options: { label: string; element: Block; blockId?: string; optional?: boolean; hint?: string; dispatchAction?: boolean }): Block {
+  const block: Block = { type: "input", label: plainText(options.label), element: options.element };
+  if (options.blockId !== undefined) block["block_id"] = options.blockId;
+  if (options.optional) block["optional"] = true;
+  if (options.hint !== undefined) block["hint"] = plainText(options.hint);
+  if (options.dispatchAction) block["dispatch_action"] = true;
+  return block;
+}
+
+export function plainTextInput(options: { actionId: string; multiline?: boolean; initial?: string; placeholder?: string; maxLength?: number }): Block {
+  const el: Block = { type: "plain_text_input", action_id: options.actionId };
+  if (options.multiline) el["multiline"] = true;
+  if (options.initial !== undefined) el["initial_value"] = options.initial;
+  if (options.placeholder !== undefined) el["placeholder"] = plainText(options.placeholder);
+  if (options.maxLength !== undefined) el["max_length"] = options.maxLength;
+  return el;
+}
+
+/** A single (`static_select`) or multi (`multi`: `multi_static_select`) select over `[text, value]` options. */
+export function staticSelect(options: {
+  actionId: string;
+  options: Array<[string, string]>;
+  initial?: string | string[];
+  placeholder?: string;
+  multi?: boolean;
+}): Block {
+  const opts = options.options.map(([t, v]) => option(t, v));
+  const el: Block = { type: options.multi ? "multi_static_select" : "static_select", action_id: options.actionId, options: opts };
+  if (options.placeholder !== undefined) el["placeholder"] = plainText(options.placeholder);
+  if (options.initial !== undefined) {
+    const chosen = ([] as string[]).concat(options.initial);
+    const picked = opts.filter((o) => chosen.includes(o["value"] as string));
+    if (options.multi) el["initial_options"] = picked;
+    else if (picked[0]) el["initial_option"] = picked[0];
+  }
+  return el;
+}
+
+export function usersSelect(options: { actionId: string; initial?: string; placeholder?: string }): Block {
+  const el: Block = { type: "users_select", action_id: options.actionId };
+  if (options.initial !== undefined) el["initial_user"] = options.initial;
+  if (options.placeholder !== undefined) el["placeholder"] = plainText(options.placeholder);
+  return el;
+}
+
+export function datePicker(options: { actionId: string; initial?: string; placeholder?: string }): Block {
+  const el: Block = { type: "datepicker", action_id: options.actionId };
+  if (options.initial !== undefined) el["initial_date"] = options.initial;
+  if (options.placeholder !== undefined) el["placeholder"] = plainText(options.placeholder);
+  return el;
+}
+
+/** A modal view. */
+export function modal(options: {
+  title: string;
+  blocks: Block[];
+  submit?: string;
+  close?: string;
+  callbackId?: string;
+  privateMetadata?: string;
+  externalId?: string;
+}): Block {
+  const view: Block = { type: "modal", title: plainText(bound(options.title, 24)), blocks: options.blocks };
+  if (options.submit !== undefined) view["submit"] = plainText(options.submit);
+  if (options.close !== undefined) view["close"] = plainText(options.close);
+  if (options.callbackId !== undefined) view["callback_id"] = options.callbackId;
+  if (options.privateMetadata !== undefined) view["private_metadata"] = options.privateMetadata;
+  if (options.externalId !== undefined) view["external_id"] = options.externalId;
+  return view;
+}
+
+/* ---- rich_text ---- */
+
+export interface RichStyle {
+  bold?: boolean;
+  italic?: boolean;
+  strike?: boolean;
+  code?: boolean;
+}
+
+/**
+ * `rich_text` builders: literal text that mrkdwn would mangle (emoji inside link anchors, `*` and `_` as themselves),
+ * real bullet lists, and per-run styles.
+ */
+export const rich = {
+  /** The `rich_text` block. */
+  block: (...elements: Block[]): Block => ({ type: "rich_text", elements }),
+  /** A paragraph of inline elements (strings become plain text). */
+  section: (...elements: Array<string | Block>): Block => ({
+    type: "rich_text_section",
+    elements: elements.map((e) => (typeof e === "string" ? rich.text(e) : e)),
+  }),
+  /** A bullet (or numbered) list of sections. */
+  list: (items: Block[], options: { style?: "bullet" | "ordered"; indent?: number } = {}): Block => {
+    const block: Block = { type: "rich_text_list", style: options.style ?? "bullet", elements: items };
+    if (options.indent) block["indent"] = options.indent;
+    return block;
+  },
+  quote: (...elements: Array<string | Block>): Block => ({
+    type: "rich_text_quote",
+    elements: elements.map((e) => (typeof e === "string" ? rich.text(e) : e)),
+  }),
+  preformatted: (text: string): Block => ({ type: "rich_text_preformatted", elements: [rich.text(text)] }),
+  text: (text: string, style?: RichStyle): Block => (style ? { type: "text", text, style } : { type: "text", text }),
+  link: (url: string, text?: string, style?: RichStyle): Block => {
+    const el: Block = { type: "link", url };
+    if (text !== undefined) el["text"] = text;
+    if (style) el["style"] = style;
+    return el;
+  },
+  /** An emoji by name (`"star"`, not `":star:"`). */
+  emoji: (name: string): Block => ({ type: "emoji", name: name.replace(/^:|:$/g, "") }),
+  user: (id: string): Block => ({ type: "user", user_id: id }),
+  channel: (id: string): Block => ({ type: "channel", channel_id: id }),
+  date: (tsS: number, format: string, fallback?: string): Block => {
+    const el: Block = { type: "date", timestamp: Math.floor(tsS), format };
+    if (fallback !== undefined) el["fallback"] = fallback;
+    return el;
+  },
+};

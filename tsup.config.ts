@@ -8,6 +8,7 @@ export default defineConfig({
     d1: "src/d1.ts",
     kv: "src/kv.ts",
     receiver: "src/receiver.ts",
+    testing: "src/testing.ts",
   },
   format: ["esm"],
   dts: true,

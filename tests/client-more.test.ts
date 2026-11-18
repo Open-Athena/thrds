@@ -96,6 +96,14 @@ describe("messages", () => {
     ]);
   });
 
+  it("a client-wide `stamp: false` sends a caller's metadata untouched (a message's own `stamp` wins)", async () => {
+    const { client: c, calls } = client({ "chat.postMessage": { body: { ok: true, ts: "5.0" } } }, { stamp: false });
+    const metadata = { event_type: "staged_plan", event_payload: { plan: 7 } };
+    await c.post({ text: "a", blocks: [], metadata });
+    await c.post({ text: "b", blocks: [], stamp: true });
+    expect(calls.map((x) => x.body["metadata"])).toEqual([metadata, { event_type: "thrds", event_payload: { thrds_hash: msgHash({ text: "b", blocks: [], stamp: true }) } }]);
+  });
+
   it("attachments make a message rich (hash-stamped), so sync compares them", () => {
     expect([msgHash({ text: "a", attachments: [1] }) === msgHash({ text: "a", attachments: [2] })]).toEqual([false]);
   });

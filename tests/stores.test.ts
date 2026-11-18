@@ -1,7 +1,7 @@
 import { createRequire } from "node:module";
 import type { DatabaseSync as DatabaseSyncT } from "node:sqlite";
 import { describe, expect, it } from "vitest";
-import { SCHEMA, d1AvatarStore, d1Store, type D1Like, type D1Statement } from "../src/d1";
+import { SCHEMA, d1AvatarStore, d1Store, sqliteD1, type D1Like } from "../src/d1";
 import { kvAvatarStore, kvStore, type KVLike } from "../src/kv";
 import { syncSlots } from "../src/slots";
 import { fakeChannel } from "./helpers";
@@ -9,27 +9,16 @@ import { fakeChannel } from "./helpers";
 // Vite doesn't know `node:sqlite` as a builtin (it strips the prefix), so load it through Node's own require.
 const { DatabaseSync } = createRequire(import.meta.url)("node:sqlite") as { DatabaseSync: typeof DatabaseSyncT };
 
-/** An in-memory D1 over `node:sqlite`: the `prepare(sql).bind(...).first/run` surface the adapters use. */
-function sqliteD1(schema = SCHEMA): { db: D1Like; raw: DatabaseSyncT } {
+/** An in-memory D1 over `node:sqlite`, through the exported adapter. */
+function memD1(schema = SCHEMA): { db: D1Like; raw: DatabaseSyncT } {
   const raw = new DatabaseSync(":memory:");
   if (schema) raw.exec(schema);
-  const stmt = (sql: string, params: unknown[] = []): D1Statement => ({
-    bind: (...args) => stmt(sql, args),
-    async first<T>(col?: string) {
-      const row = raw.prepare(sql).all(...(params as never[]))[0] as Record<string, unknown> | undefined;
-      if (!row) return null;
-      return (col ? row[col] : { ...row }) as T;
-    },
-    async run() {
-      return { meta: { changes: Number(raw.prepare(sql).run(...(params as never[])).changes) } };
-    },
-  });
-  return { db: { prepare: (sql) => stmt(sql) }, raw };
+  return { db: sqliteD1(raw), raw };
 }
 
 describe("d1Store", () => {
   it("round-trips state, one row per key", async () => {
-    const { db, raw } = sqliteD1();
+    const { db, raw } = memD1();
     const store = d1Store(db, { now: () => 7 });
     await store.put("a", { slots: { x: { ts: "1.0", hash: "h" } } });
     await store.put("a", { parent: { ts: "0.5", hash: "p" }, slots: {} });
@@ -41,7 +30,7 @@ describe("d1Store", () => {
   });
 
   it("claim is compare-and-swap: one holder until release or expiry; a stale lease can't write", async () => {
-    const { db } = sqliteD1();
+    const { db } = memD1();
     const store = d1Store(db);
     const a = await store.claim("k", 60, 1000);
     const b = await store.claim("k", 60, 1030);
@@ -54,7 +43,7 @@ describe("d1Store", () => {
   });
 
   it("drives syncSlots with a lease, end to end", async () => {
-    const { db, raw } = sqliteD1();
+    const { db, raw } = memD1();
     const { client } = fakeChannel();
     const r = await syncSlots(client, d1Store(db), { key: "week:2026-11-13", parent: "3 emoji added", slots: [{ slot: "2026-11-13", msg: ":a: :b: :c:" }] }, { leaseS: 30 });
     expect([r.actions.map((a) => a.type), raw.prepare("SELECT key, lease FROM thrds_slots").all(), JSON.parse((raw.prepare("SELECT state FROM thrds_slots").get() as { state: string }).state).slots]).toEqual([
@@ -65,17 +54,17 @@ describe("d1Store", () => {
   });
 
   it("refuses an unsafe table name", () => {
-    expect(() => d1Store(sqliteD1().db, { table: "x; DROP TABLE y" })).toThrow('d1: bad table name "x; DROP TABLE y"');
+    expect(() => d1Store(memD1().db, { table: "x; DROP TABLE y" })).toThrow('d1: bad table name "x; DROP TABLE y"');
   });
 });
 
 describe("d1AvatarStore", () => {
   it("stores once by sha (disky's public_avatars schema), and reads a missing table as empty", async () => {
-    const { db, raw } = sqliteD1();
+    const { db, raw } = memD1();
     const store = d1AvatarStore(db);
     await store.put("ab", { type: "image/png", bytes: new Uint8Array([1, 2, 3]) }, 5);
     await store.put("ab", { type: "image/png", bytes: new Uint8Array([9]) }, 6);
-    const noTable = d1AvatarStore(sqliteD1("").db);
+    const noTable = d1AvatarStore(memD1("").db);
     expect([await store.get("ab"), await store.get("cd"), raw.prepare("SELECT * FROM public_avatars").all(), await noTable.get("ab")]).toEqual([
       { type: "image/png", bytes: new Uint8Array([1, 2, 3]) },
       null,
@@ -109,5 +98,13 @@ describe("kv", () => {
       null,
       [["thrds:avatar:ab", '{"type":"image/png","data":"AQID"}']],
     ]);
+  });
+});
+
+describe("schema/thrds.sql", () => {
+  it("is SCHEMA, for wrangler migrations", async () => {
+    const { readFileSync } = await import("node:fs");
+    const file = readFileSync(new URL("../schema/thrds.sql", import.meta.url), "utf8");
+    expect(file.split("\n").filter((l) => !l.startsWith("--")).join("\n")).toBe(SCHEMA);
   });
 });

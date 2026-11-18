@@ -22,7 +22,7 @@ export interface VerifyInput {
   toleranceS?: number;
 }
 
-export type VerifyFailure = "missing_headers" | "stale" | "bad_signature";
+export type VerifyFailure = "missing_secret" | "missing_headers" | "stale" | "bad_signature";
 export type VerifyResult = { ok: true } | { ok: false; reason: VerifyFailure };
 
 const hex = (b: ArrayBuffer): string => [...new Uint8Array(b)].map((x) => x.toString(16).padStart(2, "0")).join("");
@@ -43,6 +43,8 @@ export async function slackSignature(signingSecret: string, timestamp: string, b
 
 export async function verifySlackSignature(input: VerifyInput): Promise<VerifyResult> {
   const { signingSecret, body, timestamp, signature, toleranceS = 300 } = input;
+  // A misconfigured (empty) secret fails closed, as a result rather than Web Crypto's zero-length-key throw.
+  if (!signingSecret) return { ok: false, reason: "missing_secret" };
   if (!timestamp || !signature) return { ok: false, reason: "missing_headers" };
   const ts = Number(timestamp);
   const nowS = input.nowS ?? Math.floor(Date.now() / 1000);
@@ -80,20 +82,94 @@ export interface SlashCommand {
   responseUrl: string;
 }
 
+export interface InteractionUser {
+  id: string;
+  username?: string;
+  name?: string;
+  team_id?: string;
+}
+
+export interface InteractionMessage {
+  ts: string;
+  text?: string;
+  user?: string;
+  bot_id?: string;
+  thread_ts?: string;
+  blocks?: unknown[];
+  attachments?: unknown[];
+  [k: string]: unknown;
+}
+
+export interface ViewState {
+  id: string;
+  hash?: string;
+  callback_id?: string;
+  external_id?: string;
+  private_metadata?: string;
+  state?: { values: Record<string, Record<string, unknown>> };
+  [k: string]: unknown;
+}
+
+export interface BlockAction {
+  action_id: string;
+  block_id?: string;
+  value?: string;
+  type: string;
+  [k: string]: unknown;
+}
+
 /** An interaction payload (`block_actions`, `view_submission`, `view_closed`, `shortcut`, `message_action`, …). */
 export interface Interaction {
   type: string;
-  user?: { id: string; username?: string; name?: string; team_id?: string };
+  user?: InteractionUser;
   trigger_id?: string;
   response_url?: string;
-  actions?: Array<{ action_id: string; block_id?: string; value?: string; type: string; [k: string]: unknown }>;
-  view?: { id: string; hash?: string; callback_id?: string; private_metadata?: string; state?: { values: Record<string, Record<string, unknown>> }; [k: string]: unknown };
+  actions?: BlockAction[];
+  view?: ViewState;
   callback_id?: string;
   channel?: { id: string; name?: string };
-  message?: { ts: string; text?: string; [k: string]: unknown };
+  message?: InteractionMessage;
   container?: Record<string, unknown>;
   [k: string]: unknown;
 }
+
+/** A button / select click in a message or view. */
+export interface BlockActionsPayload extends Interaction {
+  type: "block_actions";
+  user: InteractionUser;
+  trigger_id: string;
+  actions: BlockAction[];
+}
+
+export interface ViewSubmissionPayload extends Interaction {
+  type: "view_submission";
+  user: InteractionUser;
+  view: ViewState;
+}
+
+/** A message shortcut ("…" menu on a message). */
+export interface MessageActionPayload extends Interaction {
+  type: "message_action";
+  user: InteractionUser;
+  callback_id: string;
+  trigger_id: string;
+  response_url: string;
+  channel: { id: string; name?: string };
+  message: InteractionMessage;
+}
+
+/** A global shortcut (lightning-bolt menu). */
+export interface ShortcutPayload extends Interaction {
+  type: "shortcut";
+  user: InteractionUser;
+  callback_id: string;
+  trigger_id: string;
+}
+
+export const isBlockActions = (p: Interaction): p is BlockActionsPayload => p.type === "block_actions";
+export const isViewSubmission = (p: Interaction): p is ViewSubmissionPayload => p.type === "view_submission";
+export const isMessageAction = (p: Interaction): p is MessageActionPayload => p.type === "message_action";
+export const isShortcut = (p: Interaction): p is ShortcutPayload => p.type === "shortcut";
 
 export type SlackBody =
   | { kind: "url_verification"; challenge: string }
@@ -102,8 +178,16 @@ export type SlackBody =
   | { kind: "command"; command: SlashCommand; raw: Record<string, string> }
   | { kind: "unknown"; raw: unknown };
 
-/** Parse a (verified) request body by its content type. */
+/** Parse a (verified) request body by its content type; a malformed one is `unknown`, never a throw. */
 export function parseSlackBody(body: string, contentType: string | null): SlackBody {
+  try {
+    return parseBody(body, contentType);
+  } catch {
+    return { kind: "unknown", raw: body };
+  }
+}
+
+function parseBody(body: string, contentType: string | null): SlackBody {
   if ((contentType ?? "").includes("application/json")) {
     const json = JSON.parse(body) as Record<string, unknown>;
     if (json["type"] === "url_verification") return { kind: "url_verification", challenge: String(json["challenge"]) };
@@ -140,13 +224,19 @@ export function parseSlackBody(body: string, contentType: string | null): SlackB
   return { kind: "unknown", raw: form };
 }
 
-/** A view submission's input values, flattened to `{ [actionId]: value }` (text, selects, dates, checkboxes). */
-export function viewValues(payload: Interaction): Record<string, unknown> {
+/**
+ * A view submission's input values, flattened (text, selects, dates, checkboxes): by `action_id` (default), or by
+ * `block_id` when every input shares one action id and blocks tell them apart.
+ */
+export function viewValues<T extends Record<string, unknown> = Record<string, unknown>>(
+  payload: Interaction,
+  options: { by?: "action" | "block" } = {},
+): T {
   const out: Record<string, unknown> = {};
-  for (const block of Object.values(payload.view?.state?.values ?? {})) {
+  for (const [blockId, block] of Object.entries(payload.view?.state?.values ?? {})) {
     for (const [actionId, raw] of Object.entries(block)) {
       const v = raw as Record<string, unknown>;
-      out[actionId] =
+      out[options.by === "block" ? blockId : actionId] =
         v["value"] ??
         (v["selected_option"] as { value?: string } | undefined)?.value ??
         (v["selected_options"] as Array<{ value: string }> | undefined)?.map((o) => o.value) ??
@@ -160,7 +250,7 @@ export function viewValues(payload: Interaction): Record<string, unknown> {
         null;
     }
   }
-  return out;
+  return out as T;
 }
 
 export interface RespondOptions {
@@ -197,6 +287,8 @@ export async function respond(responseUrl: string, m: MsgLike | null, options: R
 export const viewErrors = (errors: Record<string, string>): Record<string, unknown> => ({ response_action: "errors", errors });
 
 export interface HandlerContext {
+  /** The request (its body is already read: use the parsed payload). */
+  request: Request;
   /** Slack's delivery retry (`X-Slack-Retry-Num`), or 0 for a first delivery. */
   retryNum: number;
   retryReason: string | null;
@@ -214,10 +306,15 @@ export interface SlackHandlerOptions {
   /** Must finish within Slack's 3 s; defer slow work with `ctx.waitUntil` and reply via `respond`. */
   onInteraction?: (payload: Interaction, ctx: HandlerContext) => Promise<HandlerReply> | HandlerReply;
   onCommand?: (command: SlashCommand, ctx: HandlerContext) => Promise<HandlerReply> | HandlerReply;
+  /**
+   * Run work after the ack: a Worker's `ctx.waitUntil`, or Next.js's `after` from `next/server`. Without one, deferred
+   * work is awaited before the response is returned, which on Node can blow Slack's 3 s ack budget.
+   */
   waitUntil?: (p: Promise<unknown>) => void;
   /** Drop Events API retries (Slack re-sends when an ack is late). Default true: handlers needn't be idempotent. */
   ignoreEventRetries?: boolean;
   nowS?: () => number;
+  /** Failures in deferred work (default `console.error`: never swallowed silently). */
   onError?: (e: unknown) => void;
 }
 
@@ -227,7 +324,7 @@ const json = (body: unknown): Response =>
 
 /** A `fetch`-style handler for one Slack request URL (events, interactivity and commands can share it). */
 export function slackHandler(options: SlackHandlerOptions): (request: Request) => Promise<Response> {
-  const { signingSecret, onEvent, onInteraction, onCommand, ignoreEventRetries = true, onError } = options;
+  const { signingSecret, onEvent, onInteraction, onCommand, ignoreEventRetries = true, onError = (e: unknown) => console.error("slackHandler:", e) } = options;
   return async (request) => {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     const contentType = request.headers.get("content-type");
@@ -235,8 +332,9 @@ export function slackHandler(options: SlackHandlerOptions): (request: Request) =
     if (!verified.ok) return new Response(`invalid request (${verified.reason})\n`, { status: 401 });
     const retryNum = Number(request.headers.get("x-slack-retry-num") ?? 0);
     const pending: Promise<unknown>[] = [];
-    const guard = (p: Promise<unknown>): Promise<unknown> => p.catch((e) => onError?.(e));
+    const guard = (p: Promise<unknown>): Promise<unknown> => p.catch((e) => onError(e));
     const ctx: HandlerContext = {
+      request,
       retryNum,
       retryReason: request.headers.get("x-slack-retry-reason"),
       waitUntil: (p) => (options.waitUntil ? options.waitUntil(guard(p)) : void pending.push(guard(p))),

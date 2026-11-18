@@ -62,3 +62,15 @@ Document in the README:
 - **disky** (`site/functions/_lib/badgedAvatar.ts`): import `badgedSvg` and the glyphs from `@open-athena/thrds/avatar`, and keep its `BADGES` colors, `badgeOf`, resvg rendering and D1 publishing. The output should be byte-identical, so its existing golden test proves the swap.
 - **oa-internal-coordination**: see its `specs/echo-as-author.md`.
 - **ctbk** `gbfs/api` already uses thrds TS, but under the old name `@rdub/thrds` from `runsascoded/thrds#ts-dist`. Repoint it at `@open-athena/thrds` when convenient (not part of this spec).
+
+## Implemented (2026-11-18)
+
+Landed as specified in `src/avatar.ts`. `badgedSvg(face, badge, style, px)` takes a `Badge` (`{color, glyph?, fill?, image?}`), and its output is byte-identical to disky's for disky's colors/glyphs. Also: `GLYPHS` (disky's six plus robot, gear, hourglass and chat) and `BADGES` presets.
+
+Beyond the spec:
+- **Identicon and service-icon PNGs:** `identiconSeed(secret, actor, label)`. disky must pass `label: "disky-identicon"`, or every generated face changes.
+- **Content-addressed hosting:** `publishAvatar` and `avatarResponse`, over an `AvatarStore` (`memoryAvatarStore`, `d1AvatarStore` on disky's `public_avatars` schema, `kvAvatarStore`).
+- **`badgedAvatarUrl`,** with an injected rasterizer and memo (`memoKey` for byte faces).
+- **Stateless derived avatars:** `derivedAvatarUrl` / `derivedAvatarHandler`, for oa-internal-coordination on Cloud Run.
+
+Per-message `iconUrl` (and the whole sender) landed on `Msg`. The stale README was rewritten. See `slack-toolkit-reuse.md` for the rest of the toolkit.

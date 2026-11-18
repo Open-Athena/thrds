@@ -71,6 +71,11 @@ export interface SlackClientOptions extends TransportOptions, Sender {
   linkNames?: boolean;
   /** Minimum gap between this client family's write calls (shared with `in(channel)` siblings). */
   minIntervalMs?: number;
+  /**
+   * Default for `Msg.stamp`: whether rich messages carry a content hash in their metadata. Leave it on for clients used
+   * with `sync` or `threadStore`, which compare by that hash (`syncSlots` with a real store doesn't need it).
+   */
+  stamp?: boolean;
   /** Cap on cached users (oldest go first). Default `MAX_CACHED_USERS`. */
   userCacheSize?: number;
   /** Replace the HTTP transport, e.g. `webClientTransport(app.client)` to run over Bolt's `WebClient`. */
@@ -482,7 +487,7 @@ export class SlackClient implements ThreadClient {
     if (this.options.linkNames !== undefined) data["link_names"] = this.options.linkNames;
     if (msg.blocks !== undefined) data["blocks"] = msg.blocks;
     if (msg.attachments !== undefined) data["attachments"] = msg.attachments;
-    if (isRich(msg) && msg.stamp !== false) {
+    if (isRich(msg) && (msg.stamp ?? this.options.stamp ?? true)) {
       data["metadata"] = {
         event_type: msg.metadata?.event_type ?? "thrds",
         event_payload: { ...msg.metadata?.event_payload, [THRDS_HASH]: msgHash(msg) },
@@ -495,7 +500,7 @@ export class SlackClient implements ThreadClient {
 
   private sent(id: string, m: MsgLike): Message {
     const msg = toMsg(m);
-    const key = msg.stamp === false ? msg.text : contentKey(msg);
+    const key = (msg.stamp ?? this.options.stamp ?? true) ? contentKey(msg) : msg.text;
     return key === msg.text ? { id, content: msg.text } : { id, content: msg.text, key };
   }
 

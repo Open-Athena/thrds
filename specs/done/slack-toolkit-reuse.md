@@ -124,3 +124,76 @@ The pattern: **L0 is a near-universal, near-free win** (every raw-fetch project)
 7. A migration spec per consumer repo.
 
 Tests per layer use exact-equality payload assertions against the fake fetch, per the testing rules. The D1 adapter is tested against real SQL through a `node:sqlite` D1 shim.
+
+## Implemented (2026-11-18)
+
+Five commits on `ts`, 155 tests:
+- `bd4c172` L0/L1: transport, `Msg`, client.
+- `408e8a9` L2 + avatars + D1/KV.
+- `59e16e9` receiver, packaging, README.
+- `f4955b6` `threadStore` + derived avatars.
+- `b1a1731` + the builders/stores commit: hardening from the migration specs.
+
+What came out differently from the design above:
+
+- **`syncSlots` is the center, not `upsert`** (decision 3). Reading the consumers turned up two more shapes.
+  - **DB-less bots.** oa-internal-coordination and slinky have no database, so `threadStore` rebuilds slot state from the thread's own metadata tags (the snippets session's `metadataStore`).
+  - **Stateless hosts.** Cloud Run can't keep a content-addressed avatar table, so `derivedAvatarUrl` / `derivedAvatarHandler` re-render on demand and 404 stale keys.
+- **The retry claim in the first draft was wrong.** The watchy and emoji specs caught it independently: `syncSlots`' `pending` record doesn't make retrying a timed-out post safe, because the retry happens inside one `client.post`. Retries are now method-aware: never a 5xx/timeout retry for `NON_IDEMPOTENT` writes.
+- **Concurrency needed more than a lease.** A losing claimant's newer update was silently dropped (disky G3). It now marks the key dirty, and the holder renders the thread *after* claiming (`render(state)`) and re-runs until clean.
+- **Not every failure is ambiguous.** A post Slack definitely refused (`SlackApiError.definite`) clears `pending` at once. A `pending` whose recovery scan can't run (missing history scope) no longer wedges the key: `recover: "scan-or-post"`.
+
+### Gaps from the migration specs
+
+Each consumer's `specs/adopt-thrds-toolkit.md` lists the gaps it found, numbered within that spec, and a "Toolkit status" section appended to each maps them to what landed. Everything blocking a migration step landed:
+- **Transport:**
+  - method-aware retries, `maxRetryWaitMs`, `deadlineMs`;
+  - `beforeCall` (applitrack's channel blocklist), `form`, per-call `token` / options;
+  - `SlackApiError` `kind` / `definite` / sanitized messages, `retryAfterS`;
+  - `webClientTransport` (Bolt).
+- **Client:**
+  - `attachments`, per-message `unfurl` and `"omit"`, `stamp: false`, no metadata on ephemerals, `username` cap;
+  - one cached `auth()` with `teamId`; `message(ts)`; `replyCount` and a clear orphan-guard error;
+  - user-cache dedupe, `fresh`, and a size cap; `channelId` TTL / `includeArchived` / `invalidateChannels`;
+  - `senderFor` by email, `usergroupMembers`, `messages({ includeReplies })`, `minIntervalMs`, `with()`.
+- **Slots:**
+  - refusal clears `pending`; `recover` modes; dirty re-runs + render-after-claim;
+  - `channel` in state; `onGone`;
+  - `{ keep }` / `{ ts, msg }` parents, `create: false`, `force`;
+  - `fallback` / `parentFallback`, lease `renew`, batched hash saves;
+  - `partialOf`, `importAnchor`, `oneKeyStore`, `SlotClient`, golden hashes.
+- **Stores:** `durableObjectStore`, `kvStore` `codec`, `sqliteD1` (Node SQLite), `schema/thrds.sql`.
+- **Receiver:** `missing_secret`, malformed body → 400, `onError` → `console.error`, `ctx.request`, `viewValues({ by: "block" })`, typed payloads + guards.
+- **Builders:** rich_text, modal inputs, `withoutImages`, `bound({ atLine })`, `link` encoding `<`, `fitsPrivateMetadata`; `parsePermalink` leniency, `permalinksIn`, `withoutPermalinks`.
+- **Testing and packaging:** `@open-athena/thrds/testing` (the fake channel), a `default` export condition, avatar `memoKey`.
+
+**Deferred** (none block a step):
+- An append-log primitive with per-slot rows for 100+-reply append-only threads (watchy G4). Whole-state JSON is fine at today's volumes.
+- Per-channel×method pacing (watchy G6). `minIntervalMs` is per client family.
+- A raw-message escape hatch on `SlackMessage` (applitrack G7), and lazy `auth.test` for reads (auth G8).
+- `post` returning the channel Slack answered with (disky, minor).
+- **Python parity** (watchy G14): `post` / `edit` with `metadata`, and paginated history with `include_all_metadata`, on the `py` branch.
+
+### Reconciled: `specs/slack-kit.md`
+
+The snippets session wrote a parallel spec of the same work (untracked, 2026-11-18 10:16), after this one's survey. Its design converges with this one. Its distinct ideas were adopted:
+- `fromWebClient` → `webClientTransport`;
+- the per-call `token` override;
+- `usergroupMembers`;
+- `metadataStore` → `threadStore`;
+- `channel` in stored state.
+
+Its `slack/*` subpath naming wasn't adopted: flat subpaths (`/receiver`, `/d1`, …) split by what each consumer loads.
+
+### Migration specs (untracked in each repo, for that repo's session)
+
+| Repo | Spec | Notes |
+|---|---|---|
+| hccs/ctbk | `specs/adopt-thrds-toolkit.md` | name bump to `@open-athena/thrds`; `sync` unchanged |
+| disky (`wt/gcs`) | `specs/adopt-thrds-toolkit.md` | avatars, transport, verify, fleet `upsert`; activity → `@open-athena/auth/activity`; staged threads on primitives |
+| oa/auth | `specs/adopt-thrds-toolkit.md` | sink on `syncSlots` over a `SlotState` checkpoint; makes auth's activity the shared implementation |
+| rac/watchy | `specs/adopt-thrds-toolkit.md` | weekly OP `{ keep }` + rollup slot, event slots under `{ ts }`; builds on `specs/slack-sync.md` |
+| oa/emoji | `specs/adopt-thrds-toolkit.md` | `syncDigest` → `syncSlots` over Durable Object storage; leaderboard edit-only |
+| slinky | `specs/adopt-thrds-toolkit.md` | receiver + `senderFor` + user-token delete |
+| oa/applitrack | `specs/adopt-thrds-toolkit.md` | 9 transport copies, receiver (fixes `url_verification` before verify), blocklist via `beforeCall` |
+| oa/oa-internal-coordination | `specs/echo-as-author.md` (updated) | derived avatars + optional `syncSlots` over `threadStore` |

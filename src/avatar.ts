@@ -327,6 +327,8 @@ export interface BadgedAvatarOptions {
   fetch?: typeof fetch;
   /** Memo across calls (per isolate). Pass one Map per app; omit to always render. */
   memo?: Map<string, string>;
+  /** The memo key for a bytes face (an identicon), which has no URL to key on: e.g. `id:<email>`. */
+  memoKey?: string;
   onError?: (e: unknown) => void;
 }
 
@@ -341,7 +343,8 @@ export async function badgedAvatarUrl(
 ): Promise<string | null> {
   const { store, origin, rasterize, style = "fold", px = 256, prefix, fetch: fetchImpl, memo, onError } = options;
   if (!origin.startsWith("https://") || face === null) return null;
-  const memoKey = typeof face === "string" ? avatarKey(face, badge, style) : null;
+  const memoKey =
+    typeof face === "string" ? avatarKey(face, badge, style) : options.memoKey !== undefined ? avatarKey(options.memoKey, badge, style) : null;
   const hit = memoKey !== null ? memo?.get(memoKey) : undefined;
   if (hit !== undefined) return hit;
   try {
