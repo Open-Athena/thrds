@@ -1,7 +1,7 @@
 {
   "name": "@open-athena/thrds",
-  "version": "0.1.2",
-  "description": "Declarative thread sync for Slack, Discord, and Bluesky",
+  "version": "0.2.0",
+  "description": "Slack toolkit + declarative thread sync: transport, rich messages, slotted threads over pluggable stores (D1/KV), a request receiver, and badged sender avatars",
   "license": "MIT",
   "author": "Ryan Williams",
   "homepage": "https://github.com/Open-Athena/thrds",
@@ -20,7 +20,12 @@
     "thread",
     "sync",
     "declarative",
-    "diff"
+    "diff",
+    "bot",
+    "cloudflare-workers",
+    "d1",
+    "block-kit",
+    "avatar"
   ],
   "type": "module",
   "main": "./dist/index.js",
@@ -29,6 +34,22 @@
     ".": {
       "types": "./dist/index.d.ts",
       "import": "./dist/index.js"
+    },
+    "./avatar": {
+      "types": "./dist/avatar.d.ts",
+      "import": "./dist/avatar.js"
+    },
+    "./d1": {
+      "types": "./dist/d1.d.ts",
+      "import": "./dist/d1.js"
+    },
+    "./kv": {
+      "types": "./dist/kv.d.ts",
+      "import": "./dist/kv.js"
+    },
+    "./receiver": {
+      "types": "./dist/receiver.d.ts",
+      "import": "./dist/receiver.js"
     }
   },
   "files": [
@@ -44,7 +65,7 @@
     "prepublishOnly": "pnpm test && pnpm build"
   },
   "engines": {
-    "node": ">=18"
+    "node": ">=22"
   },
   "devDependencies": {
     "@types/node": "^22.20.5",
