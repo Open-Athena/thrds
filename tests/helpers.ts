@@ -77,7 +77,14 @@ export interface FakeMessage {
  * A stateful fake channel: `chat.postMessage` / `update` / `delete`, `conversations.replies` / `history`, and
  * `auth.test`, behaving like Slack (ts assignment, threads, metadata, `message_not_found`). `writes` lists every write.
  */
-export function fakeChannel(options: { messages?: FakeMessage[] } = {}) {
+export function fakeChannel(
+  options: {
+    messages?: FakeMessage[];
+    /** Runs first for every call: return a reply to answer it, throw to fail it, or undefined for normal handling. */
+    intercept?: (call: Call, messages: FakeMessage[]) => Reply | undefined;
+    clientOptions?: Partial<SlackClientOptions>;
+  } = {},
+) {
   const messages: FakeMessage[] = [...(options.messages ?? [])];
   let n = 100;
   const writes: Array<[string, string]> = [];
@@ -124,6 +131,17 @@ export function fakeChannel(options: { messages?: FakeMessage[] } = {}) {
       return { body: { ok: true, messages: top } };
     },
   };
-  const { client: c, calls } = client(routes);
-  return { client: c, calls, messages, writes };
+  const intercepted: Record<string, Route> = {};
+  for (const [method, route] of Object.entries(routes)) {
+    intercepted[method] = (call) => {
+      const hit = options.intercept?.(call, messages);
+      if (hit !== undefined) return hit;
+      return typeof route === "function" ? route(call) : (route as Reply);
+    };
+  }
+  const { client: c, calls } = client(intercepted, options.clientOptions);
+  return { client: c, calls, messages, writes, routes };
 }
+
+/** An error a fake `fetch` can throw to look like a request that timed out. */
+export const timeoutError = (): Error => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });

@@ -14,12 +14,14 @@ import {
   type SyncResult,
   type Thread,
   type ThreadClient,
+  type Unfurl,
 } from "./core";
 import {
   SlackApiError,
   collect,
   paginate,
   slackCall,
+  type CallOptions,
   type SlackResponse,
   type TransportOptions,
 } from "./api";
@@ -33,6 +35,9 @@ import {
 
 export const SLACK_MESSAGE_LIMIT = 4000;
 
+/** Slack shows at most 80 characters of a `username` override. */
+export const USERNAME_MAX = 80;
+
 /** Slack mrkdwn bullet: linked bold title via `<url|*title*>`. */
 const slackBullet: BulletFn = (section, url) =>
   `- <${url}|*${section.title}*> — ${section.summary}`;
@@ -43,19 +48,66 @@ const DETAIL_URL_PLACEHOLDER = "x".repeat(130);
 /** Found users are cached this long; `users_not_found` for `NOT_FOUND_TTL_MS`; failures not at all. */
 export const USER_TTL_MS = 60 * 60 * 1000;
 export const NOT_FOUND_TTL_MS = 60 * 1000;
+/** The user cache's size cap (oldest entries go first): plenty for a workspace, bounded for a long-lived process. */
+export const MAX_CACHED_USERS = 10_000;
+/** How long a `channelId` name lookup is trusted (channels get archived and re-created). */
+export const CHANNEL_TTL_MS = 60 * 60 * 1000;
 
 export interface SlackClientOptions extends TransportOptions, Sender {
   token: string;
   /** The channel thread operations (`list`/`post`/`edit`/`delete`/`sync`) act in. `in(channel)` re-targets. */
   channel?: string;
-  /** Default true: posts and edits set `unfurl_links`/`unfurl_media` false (Slack re-unfurls on edit, too). */
+  /**
+   * Unfurling on posts and edits (Slack re-unfurls on edit, too): `false` (the default) sends
+   * `unfurl_links`/`unfurl_media` false, `true` sends them true, `{links, media}` sends only what's given, and
+   * `"omit"` sends neither (Slack's defaults). A message's own `unfurl` wins.
+   */
+  unfurl?: Unfurl | "omit";
+  /** Shorthand for `unfurl: !suppressUnfurls`; `unfurl` wins when both are given. */
   suppressUnfurls?: boolean;
   /** Sent as `parse` on posts and edits (`"none"`: don't auto-link names/channels). */
   parse?: "none" | "full";
   /** Sent as `link_names` on posts and edits. */
   linkNames?: boolean;
-  /** Clock (ms), for cache expiry. */
-  now?: () => number;
+  /** Minimum gap between this client family's write calls (shared with `in(channel)` siblings). */
+  minIntervalMs?: number;
+  /** Cap on cached users (oldest go first). Default `MAX_CACHED_USERS`. */
+  userCacheSize?: number;
+  /** Replace the HTTP transport, e.g. `webClientTransport(app.client)` to run over Bolt's `WebClient`. */
+  transport?: Transport;
+}
+
+/** What `SlackClient` sends its calls through (default: `slackCall`). */
+export type Transport = (
+  token: string,
+  method: string,
+  body: Record<string, unknown>,
+  options: CallOptions,
+) => Promise<{ json: SlackResponse; headers: Headers }>;
+
+/**
+ * A transport over a Bolt / `@slack/web-api` `WebClient` (its token, retries and rate limiting), so a Bolt app can use
+ * `SlackClient`, `syncSlots` and friends without a second HTTP stack. Scopes come from the result's
+ * `response_metadata.scopes`; errors become `SlackApiError`s.
+ */
+export function webClientTransport(client: {
+  apiCall(method: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
+}): Transport {
+  return async (_token, method, body) => {
+    let json: Record<string, unknown>;
+    try {
+      json = await client.apiCall(method, body);
+    } catch (e) {
+      const data = (e as { data?: Record<string, unknown> }).data;
+      const code = typeof data?.["error"] === "string" ? (data["error"] as string) : "unknown_error";
+      throw new SlackApiError(method, code, 200, data, undefined, data ? "slack" : "transport", { cause: e });
+    }
+    if (json["ok"] !== true) {
+      throw new SlackApiError(method, typeof json["error"] === "string" ? json["error"] : "unknown_error", 200, json);
+    }
+    const scopes = (json["response_metadata"] as { scopes?: string[] } | undefined)?.scopes ?? [];
+    return { json: json as SlackResponse, headers: new Headers({ "x-oauth-scopes": scopes.join(",") }) };
+  };
 }
 
 export interface SlackPostOptions {
@@ -86,7 +138,11 @@ export interface SlackMessage extends Message {
   subtype?: string;
   threadTs?: string;
   replyCount?: number;
+  /** ts of the thread's latest reply (on a parent). */
+  latestReply?: string;
   blocks?: unknown[];
+  attachments?: unknown[];
+  files?: Array<Record<string, unknown>>;
   metadata?: MessageMetadata;
   reactions?: Reaction[];
 }
@@ -106,6 +162,14 @@ export interface SlackUser {
   deleted: boolean;
 }
 
+/** Who the token is (`auth.test`, cached): its user, bot, team, and OAuth scopes. */
+export interface Auth {
+  userId: string;
+  botId?: string;
+  teamId?: string;
+  scopes: Set<string>;
+}
+
 interface RawMessage {
   ts: string;
   text?: string;
@@ -115,15 +179,13 @@ interface RawMessage {
   subtype?: string;
   thread_ts?: string;
   reply_count?: number;
+  latest_reply?: string;
   blocks?: unknown[];
+  attachments?: unknown[];
+  files?: Array<Record<string, unknown>>;
   metadata?: MessageMetadata;
   reactions?: Reaction[];
   bot_profile?: { name?: string };
-}
-
-interface BotIds {
-  userId: string;
-  botId?: string;
 }
 
 interface Cached<T> {
@@ -133,10 +195,12 @@ interface Cached<T> {
 
 /** State shared by a client and its `in(channel)` siblings. */
 interface Shared {
-  botIds?: Promise<BotIds>;
-  scopes?: Promise<Set<string>>;
-  channels?: Promise<Map<string, string>>;
+  auth?: Promise<Auth>;
+  channels?: Cached<Promise<Map<string, string>>> & { archived: boolean };
   users: Map<string, Cached<SlackUser | null>>;
+  /** Lookups in flight, so concurrent callers share one request. */
+  loading: Map<string, Promise<SlackUser | null>>;
+  lastWrite?: number;
 }
 
 const CHANNEL_ID = /^[CDG][A-Z0-9]{6,}$/;
@@ -171,6 +235,16 @@ function toUser(raw: Record<string, unknown>): SlackUser {
   return user;
 }
 
+/** The request fields for an unfurl setting. */
+function unfurlFields(u: Unfurl | "omit"): Record<string, boolean> {
+  if (u === "omit") return {};
+  if (typeof u === "boolean") return { unfurl_links: u, unfurl_media: u };
+  const out: Record<string, boolean> = {};
+  if (u.links !== undefined) out["unfurl_links"] = u.links;
+  if (u.media !== undefined) out["unfurl_media"] = u.media;
+  return out;
+}
+
 export class SlackClient implements ThreadClient {
   readonly token: string;
   readonly username?: string;
@@ -180,7 +254,7 @@ export class SlackClient implements ThreadClient {
   private readonly options: SlackClientOptions;
   private readonly _channel?: string;
   private readonly shared: Shared;
-  private suppressUnfurls: boolean;
+  private unfurl: Unfurl | "omit";
   private skipOp = false;
 
   constructor(options: SlackClientOptions, shared?: Shared) {
@@ -190,8 +264,8 @@ export class SlackClient implements ThreadClient {
     this.username = options.username;
     this.iconUrl = options.iconUrl;
     this.iconEmoji = options.iconEmoji;
-    this.suppressUnfurls = options.suppressUnfurls ?? true;
-    this.shared = shared ?? { users: new Map() };
+    this.unfurl = options.unfurl ?? !(options.suppressUnfurls ?? true);
+    this.shared = shared ?? { users: new Map(), loading: new Map() };
   }
 
   /** The channel thread operations act in; throws if the client wasn't given one. */
@@ -205,17 +279,29 @@ export class SlackClient implements ThreadClient {
     return new SlackClient({ ...this.options, channel }, this.shared);
   }
 
+  /** The same client and caches with some options changed (e.g. `{ unfurl: true }`, or a different `channel`). */
+  with(options: Partial<Omit<SlackClientOptions, "token">>): SlackClient {
+    return new SlackClient({ ...this.options, ...options }, this.shared);
+  }
+
   private now(): number {
     return (this.options.now ?? Date.now)();
   }
 
-  /** Call any Web API method with this client's token, retries and timeout. */
-  async api(
-    method: string,
-    body: Record<string, unknown> = {},
-    options: { get?: boolean } = {},
-  ): Promise<SlackResponse> {
-    return (await slackCall(this.token, method, body, { ...this.options, ...options })).json;
+  /** Call any Web API method with this client's token and transport options; `options` override them per call. */
+  async api(method: string, body: Record<string, unknown> = {}, options: CallOptions = {}): Promise<SlackResponse> {
+    return (await this.call(method, body, options)).json;
+  }
+
+  private async call(method: string, body: Record<string, unknown>, options: CallOptions): Promise<{ json: SlackResponse; headers: Headers }> {
+    const merged = { ...this.options, ...options };
+    const gap = merged.minIntervalMs;
+    if (gap && !merged.get) {
+      const wait = (this.shared.lastWrite ?? -Infinity) + gap - this.now();
+      if (wait > 0) await (merged.sleep ?? sleep)(wait);
+      this.shared.lastWrite = this.now();
+    }
+    return (merged.transport ?? slackCall)(this.token, method, body, merged);
   }
 
   /** Every item of a cursor-paginated method; `key` is the response field holding the items. */
@@ -223,7 +309,7 @@ export class SlackClient implements ThreadClient {
     method: string,
     params: Record<string, unknown>,
     key: string,
-    options: { get?: boolean } = {},
+    options: CallOptions = {},
   ): AsyncGenerator<T> {
     return paginate<T>(
       (cursor) => this.api(method, { ...params, ...(cursor ? { cursor } : {}) }, options),
@@ -231,43 +317,45 @@ export class SlackClient implements ThreadClient {
     );
   }
 
-  /**
-   * Lazily resolve the authenticated bot's `user_id` and `bot_id`.
-   *
-   * Slack returns `user: null` on `bot_message` events — the bot's identity
-   * lives in `bot_id`. Matching only `user_id` mis-labels our own posts as
-   * non-editable, which makes `sync()` re-post the whole thread every run.
-   */
-  async botIds(): Promise<BotIds> {
-    this.shared.botIds ??= this.api("auth.test").then((r) => ({
-      userId: r["user_id"] as string,
-      botId: (r["bot_id"] as string | undefined) ?? undefined,
-    }));
-    try {
-      return await this.shared.botIds;
-    } catch (e) {
-      delete this.shared.botIds;
-      throw e;
-    }
-  }
-
-  /** The token's OAuth scopes (`auth.test`'s `x-oauth-scopes` header), cached. */
-  async scopes(): Promise<Set<string>> {
-    this.shared.scopes ??= slackCall(this.token, "auth.test", {}, this.options).then(
-      ({ headers }) =>
-        new Set(
+  /** The token's identity and scopes, from one cached `auth.test`. */
+  async auth(): Promise<Auth> {
+    this.shared.auth ??= this.call("auth.test", {}, {}).then(({ json, headers }) => {
+      const auth: Auth = {
+        userId: json["user_id"] as string,
+        scopes: new Set(
           (headers.get("x-oauth-scopes") ?? "")
             .split(",")
             .map((s) => s.trim())
             .filter(Boolean),
         ),
-    );
+      };
+      if (typeof json["bot_id"] === "string") auth.botId = json["bot_id"];
+      if (typeof json["team_id"] === "string") auth.teamId = json["team_id"];
+      return auth;
+    });
     try {
-      return await this.shared.scopes;
+      return await this.shared.auth;
     } catch (e) {
-      delete this.shared.scopes;
+      delete this.shared.auth;
       throw e;
     }
+  }
+
+  /**
+   * The authenticated bot's `user_id` and `bot_id`.
+   *
+   * Slack returns `user: null` on `bot_message` events — the bot's identity
+   * lives in `bot_id`. Matching only `user_id` mis-labels our own posts as
+   * non-editable, which makes `sync()` re-post the whole thread every run.
+   */
+  async botIds(): Promise<{ userId: string; botId?: string }> {
+    const { userId, botId } = await this.auth();
+    return botId === undefined ? { userId } : { userId, botId };
+  }
+
+  /** The token's OAuth scopes. */
+  async scopes(): Promise<Set<string>> {
+    return (await this.auth()).scopes;
   }
 
   /** Whether per-message `username` / `icon_url` will be honored (`chat:write.customize`). */
@@ -275,7 +363,7 @@ export class SlackClient implements ThreadClient {
     return (await this.scopes()).has("chat:write.customize");
   }
 
-  private toMessage(raw: RawMessage, ids: BotIds): SlackMessage {
+  private toMessage(raw: RawMessage, ids: { userId: string; botId?: string }): SlackMessage {
     const msg: SlackMessage = {
       id: raw.ts,
       content: raw.text ?? "",
@@ -290,7 +378,10 @@ export class SlackClient implements ThreadClient {
     if (raw.subtype) msg.subtype = raw.subtype;
     if (raw.thread_ts) msg.threadTs = raw.thread_ts;
     if (raw.reply_count !== undefined) msg.replyCount = raw.reply_count;
+    if (raw.latest_reply) msg.latestReply = raw.latest_reply;
     if (raw.blocks) msg.blocks = raw.blocks;
+    if (raw.attachments) msg.attachments = raw.attachments;
+    if (raw.files) msg.files = raw.files;
     if (raw.metadata) msg.metadata = raw.metadata;
     if (raw.reactions) msg.reactions = raw.reactions;
     return msg;
@@ -331,13 +422,27 @@ export class SlackClient implements ThreadClient {
   }
 
   /**
+   * Every message in the channel back to `oldest`: each top-level message (newest first), followed by its thread's
+   * replies when `includeReplies` (for auditing bots that post into threads).
+   */
+  async *messages(options: { oldest?: string; latest?: string; includeReplies?: boolean } = {}): AsyncGenerator<SlackMessage> {
+    const { includeReplies = false, ...range } = options;
+    for await (const m of this.history(range)) {
+      yield m;
+      if (includeReplies && (m.replyCount ?? 0) > 0) {
+        for (const reply of (await this.list(m.id)).slice(1)) yield reply;
+      }
+    }
+  }
+
+  /**
    * The first message tagged with `metadata.event_type === eventType` whose payload satisfies `match`: in a thread
    * (`threadTs`), else the channel's history back to `oldest`. How a bot finds "its" message without a database.
    */
   async findByMetadata(
     eventType: string,
     match: (payload: Record<string, unknown>) => boolean = () => true,
-    options: { threadTs?: string; oldest?: string } = {},
+    options: { threadTs?: string; oldest?: string; includeReplies?: boolean } = {},
   ): Promise<SlackMessage | null> {
     return this.find(
       (m) => m.metadata?.event_type === eventType && match(m.metadata.event_payload ?? {}),
@@ -345,45 +450,53 @@ export class SlackClient implements ThreadClient {
     );
   }
 
-  /** The first message satisfying `hit`: in a thread (`threadTs`), else the channel's history back to `oldest`. */
+  /**
+   * The first message satisfying `hit`: in a thread (`threadTs`), else the channel's history back to `oldest` (with
+   * thread replies, when `includeReplies`).
+   */
   async find(
     hit: (m: SlackMessage) => boolean,
-    options: { threadTs?: string; oldest?: string } = {},
+    options: { threadTs?: string; oldest?: string; includeReplies?: boolean } = {},
   ): Promise<SlackMessage | null> {
     if (options.threadTs !== undefined) {
       return (await this.list(options.threadTs)).find(hit) ?? null;
     }
-    for await (const m of this.history(options.oldest !== undefined ? { oldest: options.oldest } : {})) {
+    const range: { oldest?: string; includeReplies?: boolean } = {};
+    if (options.oldest !== undefined) range.oldest = options.oldest;
+    if (options.includeReplies !== undefined) range.includeReplies = options.includeReplies;
+    for await (const m of this.messages(range)) {
       if (hit(m)) return m;
     }
     return null;
   }
 
-  /** The request body a message sends: text, blocks, metadata (hash-stamped when rich), formatting flags. */
+  /** The request body a message sends: text, blocks, attachments, metadata (hash-stamped when rich), flags. */
   private body(m: MsgLike): Record<string, unknown> {
     const msg = toMsg(m);
     const data: Record<string, unknown> = {
       channel: this.channel,
       text: msg.text,
-      unfurl_links: !this.suppressUnfurls,
-      unfurl_media: !this.suppressUnfurls,
+      ...unfurlFields(msg.unfurl ?? this.unfurl),
     };
     if (this.options.parse !== undefined) data["parse"] = this.options.parse;
     if (this.options.linkNames !== undefined) data["link_names"] = this.options.linkNames;
     if (msg.blocks !== undefined) data["blocks"] = msg.blocks;
-    if (isRich(msg)) {
+    if (msg.attachments !== undefined) data["attachments"] = msg.attachments;
+    if (isRich(msg) && msg.stamp !== false) {
       data["metadata"] = {
         event_type: msg.metadata?.event_type ?? "thrds",
         event_payload: { ...msg.metadata?.event_payload, [THRDS_HASH]: msgHash(msg) },
       };
+    } else if (msg.metadata !== undefined) {
+      data["metadata"] = msg.metadata;
     }
     return data;
   }
 
   private sent(id: string, m: MsgLike): Message {
-    const key = contentKey(m);
-    const content = toMsg(m).text;
-    return key === content ? { id, content } : { id, content, key };
+    const msg = toMsg(m);
+    const key = msg.stamp === false ? msg.text : contentKey(msg);
+    return key === msg.text ? { id, content: msg.text } : { id, content: msg.text, key };
   }
 
   /** Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. */
@@ -393,7 +506,7 @@ export class SlackClient implements ThreadClient {
     const username = msg.username ?? this.username;
     const iconUrl = msg.iconUrl ?? this.iconUrl;
     const iconEmoji = msg.iconEmoji ?? this.iconEmoji;
-    if (username !== undefined) data["username"] = username;
+    if (username !== undefined) data["username"] = [...username].slice(0, USERNAME_MAX).join("");
     if (iconUrl !== undefined) data["icon_url"] = iconUrl;
     else if (iconEmoji !== undefined) data["icon_emoji"] = iconEmoji;
     if (threadId !== undefined) {
@@ -401,31 +514,71 @@ export class SlackClient implements ThreadClient {
       if (msg.replyBroadcast) data["reply_broadcast"] = true;
     }
     const result = await this.api("chat.postMessage", data);
-    return this.sent(result["ts"] as string, msg);
+    const ts = result["ts"];
+    // Recording a missing ts would make the next run post again.
+    if (typeof ts !== "string" || !ts) throw new SlackApiError("chat.postMessage", "invalid_response", 200, result, undefined, "http");
+    return this.sent(ts, msg);
   }
 
   /**
-   * Edit a message's text, blocks and metadata. Slack ignores sender fields on an edit. To clear a message's blocks,
-   * pass `blocks: []`; omitting `blocks` leaves them as they were.
+   * Edit a message's text, blocks, attachments and metadata. Slack ignores sender fields on an edit. To clear blocks
+   * or attachments, pass `[]`; omitting them leaves them as they were. For Slack's raw reply (`message`), call
+   * `api("chat.update", …)` directly.
    */
   async edit(messageId: string, m: MsgLike): Promise<Message> {
     await this.api("chat.update", { ...this.body(m), ts: messageId });
     return this.sent(messageId, m);
   }
 
+  /**
+   * One message by ts, read cheaply (`conversations.replies`, `limit: 1`): a thread parent or top-level message, with
+   * its reactions and reply count. Null if it's gone.
+   */
+  async message(ts: string): Promise<SlackMessage | null> {
+    let result: SlackResponse;
+    try {
+      result = await this.api("conversations.replies", { channel: this.channel, ts, limit: 1, include_all_metadata: true }, { get: true });
+    } catch (e) {
+      if (e instanceof SlackApiError && (e.code === "thread_not_found" || e.code === "message_not_found")) return null;
+      throw e;
+    }
+    const raw = ((result["messages"] ?? []) as RawMessage[])[0];
+    if (!raw || raw.ts !== ts) return null;
+    return this.toMessage(raw, await this.botIds());
+  }
+
+  /** How many replies a thread has (0 for a message without one). Needs a history scope on this token. */
+  async replyCount(ts: string): Promise<number> {
+    const result = await this.api("conversations.replies", { channel: this.channel, ts }, { get: true });
+    const messages = (result["messages"] ?? []) as RawMessage[];
+    return messages[0]?.reply_count ?? Math.max(0, messages.length - 1);
+  }
+
+  /**
+   * Delete a message. Unless `orphansOk`, first refuses (`OrphanedRepliesError`) if it has thread replies, which
+   * needs a history scope on this token: with a token that only has `chat:write`, check `replyCount` with another
+   * client first and pass `orphansOk`.
+   */
   async delete(
     messageId: string,
     options: SlackDeleteOptions = {},
   ): Promise<void> {
     if (!options.orphansOk) {
-      const result = await this.api(
-        "conversations.replies",
-        { channel: this.channel, ts: messageId },
-        { get: true },
-      );
-      const replies = (result["messages"] ?? []) as unknown[];
-      if (replies.length > 1) {
-        throw new OrphanedRepliesError(messageId, replies.length - 1);
+      let replies: number;
+      try {
+        replies = await this.replyCount(messageId);
+      } catch (e) {
+        if (e instanceof SlackApiError && e.code === "missing_scope") {
+          throw new Error(
+            "delete: the orphaned-replies check (conversations.replies) needs a history scope on this token; " +
+              "check replyCount() with a client that has one, then pass { orphansOk: true }",
+            { cause: e },
+          );
+        }
+        throw e;
+      }
+      if (replies > 0) {
+        throw new OrphanedRepliesError(messageId, replies);
       }
     }
     await this.api("chat.delete", {
@@ -434,9 +587,10 @@ export class SlackClient implements ThreadClient {
     });
   }
 
-  /** A message only `user` sees; returns its `message_ts`. */
+  /** A message only `user` sees; returns its `message_ts`. Ephemerals can't be read back, so nothing is stamped. */
   async postEphemeral(user: string, m: MsgLike, options: { threadTs?: string } = {}): Promise<string> {
-    const data: Record<string, unknown> = { ...this.body(m), user };
+    const { metadata: _metadata, ...msg } = toMsg(m);
+    const data: Record<string, unknown> = { ...this.body({ ...msg, stamp: false }), user };
     if (options.threadTs !== undefined) data["thread_ts"] = options.threadTs;
     const result = await this.api("chat.postEphemeral", data);
     return result["message_ts"] as string;
@@ -474,36 +628,66 @@ export class SlackClient implements ThreadClient {
     return ((result["message"] as { reactions?: Reaction[] } | undefined)?.reactions) ?? [];
   }
 
-  private async cachedUser(key: string, load: () => Promise<SlackUser>): Promise<SlackUser | null> {
-    const now = this.now();
-    const hit = this.shared.users.get(key);
-    if (hit && hit.expires > now) return hit.value;
-    try {
-      const user = await load();
-      this.shared.users.set(key, { value: user, expires: now + USER_TTL_MS });
-      return user;
-    } catch (e) {
-      if (e instanceof SlackApiError && (e.code === "users_not_found" || e.code === "user_not_found")) {
-        this.shared.users.set(key, { value: null, expires: now + NOT_FOUND_TTL_MS });
-        return null;
+  private async cachedUser(key: string, load: () => Promise<SlackUser>, fresh = false): Promise<SlackUser | null> {
+    const { users, loading } = this.shared;
+    const hit = users.get(key);
+    if (!fresh && hit && hit.expires > this.now()) return hit.value;
+    const inflight = loading.get(key);
+    if (inflight) return inflight;
+    const remember = (value: SlackUser | null, ttl: number): void => {
+      users.delete(key);
+      users.set(key, { value, expires: this.now() + ttl });
+      const cap = this.options.userCacheSize ?? MAX_CACHED_USERS;
+      while (users.size > cap) users.delete(users.keys().next().value!);
+    };
+    const p = (async () => {
+      try {
+        const user = await load();
+        remember(user, USER_TTL_MS);
+        return user;
+      } catch (e) {
+        if (e instanceof SlackApiError && (e.code === "users_not_found" || e.code === "user_not_found")) {
+          remember(null, NOT_FOUND_TTL_MS);
+          return null;
+        }
+        throw e;
+      } finally {
+        loading.delete(key);
       }
-      throw e;
-    }
+    })();
+    loading.set(key, p);
+    return p;
   }
 
-  /** A user by id (`users.info`), cached; null if there's no such user. */
-  async userInfo(id: string): Promise<SlackUser | null> {
-    return this.cachedUser(`id:${id}`, async () =>
-      toUser((await this.api("users.info", { user: id }, { get: true }))["user"] as Record<string, unknown>),
+  /** A user by id (`users.info`), cached; null if there's no such user. `fresh` skips the cache (authz checks). */
+  async userInfo(id: string, options: { fresh?: boolean } = {}): Promise<SlackUser | null> {
+    return this.cachedUser(
+      `id:${id}`,
+      async () => toUser((await this.api("users.info", { user: id }, { get: true }))["user"] as Record<string, unknown>),
+      options.fresh,
     );
   }
 
   /** A user by email (`users.lookupByEmail`, needs `users:read.email`), cached; null if none. */
-  async userByEmail(email: string): Promise<SlackUser | null> {
+  async userByEmail(email: string, options: { fresh?: boolean } = {}): Promise<SlackUser | null> {
     const normalized = email.trim().toLowerCase();
-    return this.cachedUser(`email:${normalized}`, async () =>
-      toUser((await this.api("users.lookupByEmail", { email: normalized }, { get: true }))["user"] as Record<string, unknown>),
+    return this.cachedUser(
+      `email:${normalized}`,
+      async () => toUser((await this.api("users.lookupByEmail", { email: normalized }, { get: true }))["user"] as Record<string, unknown>),
+      options.fresh,
     );
+  }
+
+  /** A user group's member ids, by id (`S…`) or handle (`@eng-leads` / `eng-leads`). */
+  async usergroupMembers(idOrHandle: string): Promise<string[]> {
+    let id = idOrHandle.replace(/^@/, "");
+    if (!/^S[A-Z0-9]+$/.test(id)) {
+      const groups = ((await this.api("usergroups.list", {}, { get: true }))["usergroups"] ?? []) as Array<{ id: string; handle: string }>;
+      const group = groups.find((g) => g.handle === id);
+      if (!group) throw new SlackApiError("usergroups.list", "no_such_subteam", 200);
+      id = group.id;
+    }
+    return ((await this.api("usergroups.users.list", { usergroup: id }, { get: true }))["users"] ?? []) as string[];
   }
 
   /** Every workspace member (`users.list`), lazily. */
@@ -517,38 +701,49 @@ export class SlackClient implements ThreadClient {
   }
 
   /**
-   * A sender that looks like `user`: their display/real name and Slack photo. Pair with `/avatar`'s `badgedSvg` to
-   * mark the post as automated.
+   * A sender that looks like a user (by id or email): their display/real name and Slack photo. Pair with `/avatar`'s `badgedSvg` to
+   * mark the post as automated. Null for an unknown user (or a deactivated one, unless `includeDeleted`).
    */
-  async senderFor(userId: string, options: { suffix?: string; iconUrl?: string } = {}): Promise<Sender | null> {
-    const user = await this.userInfo(userId);
-    if (!user || user.deleted) return null;
+  async senderFor(
+    userIdOrEmail: string,
+    options: { suffix?: string; iconUrl?: string; imageSize?: string; includeDeleted?: boolean } = {},
+  ): Promise<Sender | null> {
+    const user = userIdOrEmail.includes("@") ? await this.userByEmail(userIdOrEmail) : await this.userInfo(userIdOrEmail);
+    if (!user || (user.deleted && !options.includeDeleted)) return null;
     const name = user.displayName ?? user.realName ?? user.name;
-    const sender: Sender = { username: `${name}${options.suffix ?? ""}`.slice(0, 80) };
-    const icon = options.iconUrl ?? user.image;
+    const sender: Sender = { username: [...`${name}${options.suffix ?? ""}`].slice(0, USERNAME_MAX).join("") };
+    const icon = options.iconUrl ?? (options.imageSize ? user.images[options.imageSize] : undefined) ?? user.image;
     if (icon) sender.iconUrl = icon;
     return sender;
   }
 
-  /** A channel's id from `#name`, `name` or an id (returned as-is), via a cached `conversations.list`. */
-  async channelId(nameOrId: string): Promise<string> {
+  /**
+   * A channel's id from `#name`, `name` or an id (returned as-is), via `conversations.list`, cached for
+   * `CHANNEL_TTL_MS`. `refresh` re-lists now; `includeArchived` also matches archived channels.
+   */
+  async channelId(nameOrId: string, options: { refresh?: boolean; includeArchived?: boolean } = {}): Promise<string> {
     const name = nameOrId.replace(/^#/, "");
     if (CHANNEL_ID.test(name)) return name;
-    this.shared.channels ??= (async () => {
-      const map = new Map<string, string>();
-      for await (const c of this.paginate<{ id: string; name: string }>(
-        "conversations.list",
-        { types: "public_channel,private_channel", exclude_archived: true, limit: 1000 },
-        "channels",
-        { get: true },
-      )) {
-        map.set(c.name, c.id);
-      }
-      return map;
-    })();
+    const archived = options.includeArchived ?? false;
+    const cached = this.shared.channels;
+    if (options.refresh || !cached || cached.expires <= this.now() || cached.archived !== archived) {
+      const value = (async () => {
+        const map = new Map<string, string>();
+        for await (const c of this.paginate<{ id: string; name: string }>(
+          "conversations.list",
+          { types: "public_channel,private_channel", exclude_archived: !archived, limit: 1000 },
+          "channels",
+          { get: true },
+        )) {
+          map.set(c.name, c.id);
+        }
+        return map;
+      })();
+      this.shared.channels = { value, expires: this.now() + CHANNEL_TTL_MS, archived };
+    }
     let channels: Map<string, string>;
     try {
-      channels = await this.shared.channels;
+      channels = await this.shared.channels!.value;
     } catch (e) {
       delete this.shared.channels;
       throw e;
@@ -558,6 +753,11 @@ export class SlackClient implements ThreadClient {
     return id;
   }
 
+  /** Forget cached channel names (after archiving / re-creating one). */
+  invalidateChannels(): void {
+    delete this.shared.channels;
+  }
+
   /** The DM (one user) or group DM (several) channel id, opening it if needed. */
   async openDm(users: string | string[]): Promise<string> {
     const result = await this.api("conversations.open", { users: ([] as string[]).concat(users).join(",") });
@@ -565,24 +765,25 @@ export class SlackClient implements ThreadClient {
   }
 
   /** Open a modal (`views.open`); returns the view, whose `id`/`hash` `updateView` takes. */
-  async openView(triggerId: string, view: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return (await this.api("views.open", { trigger_id: triggerId, view }))["view"] as Record<string, unknown>;
+  async openView(triggerId: string, view: Record<string, unknown>, options: CallOptions = {}): Promise<Record<string, unknown>> {
+    return (await this.api("views.open", { trigger_id: triggerId, view }, options))["view"] as Record<string, unknown>;
   }
 
-  async pushView(triggerId: string, view: Record<string, unknown>): Promise<Record<string, unknown>> {
-    return (await this.api("views.push", { trigger_id: triggerId, view }))["view"] as Record<string, unknown>;
+  async pushView(triggerId: string, view: Record<string, unknown>, options: CallOptions = {}): Promise<Record<string, unknown>> {
+    return (await this.api("views.push", { trigger_id: triggerId, view }, options))["view"] as Record<string, unknown>;
   }
 
   /** Update a modal by `viewId` or `externalId`; pass the last-seen `hash` to refuse a stale overwrite. */
   async updateView(
     view: Record<string, unknown>,
     target: { viewId?: string; externalId?: string; hash?: string },
+    options: CallOptions = {},
   ): Promise<Record<string, unknown>> {
     const data: Record<string, unknown> = { view };
     if (target.viewId !== undefined) data["view_id"] = target.viewId;
     if (target.externalId !== undefined) data["external_id"] = target.externalId;
     if (target.hash !== undefined) data["hash"] = target.hash;
-    return (await this.api("views.update", data))["view"] as Record<string, unknown>;
+    return (await this.api("views.update", data, options))["view"] as Record<string, unknown>;
   }
 
   /** Publish a user's App Home tab. */
@@ -594,13 +795,13 @@ export class SlackClient implements ThreadClient {
     thread: Thread,
     options: SlackSyncOptions = {},
   ): Promise<SyncResult> {
-    const { threadTs, suppressUnfurls = this.options.suppressUnfurls ?? true, ...rest } = options;
-    const prior = this.suppressUnfurls;
-    this.suppressUnfurls = suppressUnfurls;
+    const { threadTs, suppressUnfurls, ...rest } = options;
+    const prior = this.unfurl;
+    if (suppressUnfurls !== undefined) this.unfurl = !suppressUnfurls;
     try {
       return await sync(this, thread, threadTs, rest);
     } finally {
-      this.suppressUnfurls = prior;
+      this.unfurl = prior;
     }
   }
 
@@ -724,4 +925,3 @@ export class SlackClient implements ThreadClient {
     };
   }
 }
-

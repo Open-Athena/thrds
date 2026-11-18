@@ -33,6 +33,7 @@ describe("syncSlots", () => {
       ],
       {
         "burst:1": {
+          channel: "C1",
           parent: { ts: "101.000000", hash: msgHash(parent) },
           slots: {
             details: { ts: "102.000000", hash: msgHash(tagSlot("/a, /b", "burst:1", "details")) },

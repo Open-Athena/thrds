@@ -10,6 +10,7 @@ export type {
   SyncResult,
   Thread,
   ThreadClient,
+  Unfurl,
 } from "./core";
 export {
   EditRateLimited,
@@ -22,11 +23,13 @@ export {
   toMsg,
 } from "./core";
 
-export type { CallOptions, RetryInfo, SlackResponse, TransportOptions } from "./api";
-export { SLACK_API, SlackApiError, collect, paginate, slackApi, slackCall } from "./api";
+export type { CallOptions, RetryInfo, SlackErrorKind, SlackResponse, TransportOptions } from "./api";
+export { NON_IDEMPOTENT, SLACK_API, SlackApiError, collect, paginate, slackApi, slackCall } from "./api";
 
 export type {
+  Auth,
   Reaction,
+  Transport,
   SlackClientOptions,
   SlackDeleteOptions,
   SlackMessage,
@@ -34,7 +37,16 @@ export type {
   SlackSyncOptions,
   SlackUser,
 } from "./slack";
-export { NOT_FOUND_TTL_MS, SLACK_MESSAGE_LIMIT, SlackClient, USER_TTL_MS } from "./slack";
+export {
+  CHANNEL_TTL_MS,
+  MAX_CACHED_USERS,
+  NOT_FOUND_TTL_MS,
+  SLACK_MESSAGE_LIMIT,
+  SlackClient,
+  USERNAME_MAX,
+  USER_TTL_MS,
+  webClientTransport,
+} from "./slack";
 
 export type { Block, ButtonOptions } from "./mrkdwn";
 export {
@@ -76,8 +88,11 @@ export {
 } from "./linked";
 
 export type {
+  RenderedSlotThread,
   SlotAction,
   SlotActionType,
+  SlotClient,
+  SlotParent,
   SlotRecord,
   SlotSpec,
   SlotState,
@@ -85,5 +100,20 @@ export type {
   SlotSyncOptions,
   SlotSyncResult,
   SlotThread,
+  SlotThreadSpec,
+  UpsertOptions,
 } from "./slots";
-export { LeaseLostError, SLOT_KEY, SLOT_NAME, memoryStore, syncSlots, tagSlot, threadStore, upsert } from "./slots";
+export {
+  LeaseLostError,
+  REJECTED,
+  SLOT_KEY,
+  SLOT_NAME,
+  importAnchor,
+  memoryStore,
+  oneKeyStore,
+  partialOf,
+  syncSlots,
+  tagSlot,
+  threadStore,
+  upsert,
+} from "./slots";

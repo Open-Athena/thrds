@@ -29,6 +29,7 @@ export const slotsSchema = (table = "thrds_slots"): string =>
   state TEXT NOT NULL,
   lease TEXT,
   lease_until INTEGER,
+  dirty INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );`;
 
@@ -79,8 +80,19 @@ export function d1Store(db: D1Like, options: { table?: string; now?: () => numbe
         .run();
       return (r.meta.changes ?? 0) === 1 ? token : null;
     },
+    async renew(key, lease, leaseS, at) {
+      const r = await db.prepare(`UPDATE ${t} SET lease_until = ? WHERE key = ? AND lease = ?`).bind(at + leaseS, key, lease).run();
+      return (r.meta.changes ?? 0) === 1;
+    },
     async release(key, lease) {
       await db.prepare(`UPDATE ${t} SET lease = NULL, lease_until = NULL WHERE key = ? AND lease = ?`).bind(key, lease).run();
+    },
+    async markDirty(key) {
+      await db.prepare(`UPDATE ${t} SET dirty = 1 WHERE key = ?`).bind(key).run();
+    },
+    async takeDirty(key, lease) {
+      const r = await db.prepare(`UPDATE ${t} SET dirty = 0 WHERE key = ? AND lease = ? AND dirty = 1`).bind(key, lease).run();
+      return (r.meta.changes ?? 0) === 1;
     },
   };
 }

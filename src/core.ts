@@ -44,14 +44,26 @@ export interface MessageMetadata {
   event_payload: Record<string, unknown>;
 }
 
+/** Link / media unfurling for one message: a boolean sets both. */
+export type Unfurl = boolean | { links?: boolean; media?: boolean };
+
 /** A message with everything a post can carry. A bare string is shorthand for `{ text }`. */
 export interface Msg extends Sender {
   /** The message text; with `blocks`, Slack's notification / fallback text. */
   text: string;
   blocks?: unknown[];
+  /** Legacy attachments (colored side bars, cards). `[]` clears them on an edit. */
+  attachments?: unknown[];
   metadata?: MessageMetadata;
   /** Also show a thread reply in the channel. Applies at post time. */
   replyBroadcast?: boolean;
+  /** Overrides the client's unfurl setting for this message. */
+  unfurl?: Unfurl;
+  /**
+   * Stamp a content hash into this message's metadata so a later `sync` can compare it (default true for rich
+   * messages). Set false for one-off posts that will never be synced, or edits of messages that aren't the bot's.
+   */
+  stamp?: boolean;
 }
 
 export type MsgLike = string | Msg;
@@ -70,14 +82,15 @@ export function msgHash(m: MsgLike): string {
     stableStringify({
       text: msg.text,
       blocks: msg.blocks,
+      attachments: msg.attachments,
       metadata: msg.metadata ? { event_type: msg.metadata.event_type, event_payload: payload } : undefined,
     }),
   );
 }
 
-/** Whether `m` is compared by a stamped hash rather than its text (it has blocks or metadata). */
+/** Whether `m` is compared by a stamped hash rather than its text (it has blocks, attachments or metadata). */
 export const isRich = (m: MsgLike): boolean =>
-  typeof m !== "string" && (m.blocks !== undefined || m.metadata !== undefined);
+  typeof m !== "string" && (m.blocks !== undefined || m.attachments !== undefined || m.metadata !== undefined);
 
 /**
  * How `sync` compares a desired message with a live one. Plain text compares as itself (so threads written by the
