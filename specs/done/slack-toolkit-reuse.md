@@ -172,11 +172,12 @@ Each consumer's `specs/adopt-thrds-toolkit.md` lists the gaps it found, numbered
 - Per-channel×method pacing (watchy G6). `minIntervalMs` is per client family.
 - A raw-message escape hatch on `SlackMessage` (applitrack G7), and lazy `auth.test` for reads (auth G8).
 - `post` returning the channel Slack answered with (disky, minor).
-- **Python parity** (watchy G14): `post` / `edit` with `metadata`, and paginated history with `include_all_metadata`, on the `py` branch.
 
-### Reconciled: `specs/slack-kit.md`
+**Python parity** (watchy G14) landed on `py` as `1c8b62f` ([`slack-read-parity`](https://github.com/Open-Athena/thrds/blob/py/specs/done/slack-read-parity.md)): `post` / `edit` take `metadata=`, history and thread reads paginate with `include_all_metadata`, `iter_channel_history(include_replies=True)`, `find_by_metadata`.
 
-The snippets session wrote a parallel spec of the same work (untracked, 2026-11-18 10:16), after this one's survey. Its design converges with this one. Its distinct ideas were adopted:
+### Reconciled: `specs/done/slack-kit.md`
+
+The snippets session wrote a parallel spec of the same work (2026-11-18 10:16, now filed as [`slack-kit.md`](slack-kit.md)), after this one's survey. Its design converges with this one. Its distinct ideas were adopted:
 - `fromWebClient` → `webClientTransport`;
 - the per-call `token` override;
 - `usergroupMembers`;
