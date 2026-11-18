@@ -61,11 +61,10 @@
       "import": "./dist/testing.js",
       "default": "./dist/testing.js"
     },
-    "./schema/thrds.sql": "./schema/thrds.sql"
+    "./schema/thrds.sql": "./dist/thrds.sql"
   },
   "files": [
     "dist",
-    "schema",
     "README.md",
     "LICENSE"
   ],

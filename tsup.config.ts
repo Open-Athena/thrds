@@ -15,4 +15,6 @@ export default defineConfig({
   sourcemap: true,
   clean: true,
   target: "node22",
+  // The D1 schema ships in dist/ (the dist branch carries only dist/), exported as `./schema/thrds.sql`.
+  onSuccess: "cp schema/thrds.sql dist/thrds.sql",
 });
