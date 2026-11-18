@@ -1,7 +1,7 @@
 import {
   base64,
   unbase64
-} from "./chunk-UJ6N63EC.js";
+} from "./chunk-5HP3RLKL.js";
 import "./chunk-YSTFV535.js";
 
 // src/d1.ts
@@ -15,6 +15,7 @@ var slotsSchema = (table = "thrds_slots") => `CREATE TABLE IF NOT EXISTS ${ident
   state TEXT NOT NULL,
   lease TEXT,
   lease_until INTEGER,
+  dirty INTEGER NOT NULL DEFAULT 0,
   updated_at INTEGER NOT NULL
 );`;
 var avatarsSchema = (table = "public_avatars") => `CREATE TABLE IF NOT EXISTS ${ident(table)} (
@@ -51,8 +52,19 @@ function d1Store(db, options = {}) {
       const r = await db.prepare(`UPDATE ${t} SET lease = ?, lease_until = ? WHERE key = ? AND (lease IS NULL OR lease_until <= ?)`).bind(token, at + leaseS, key, at).run();
       return (r.meta.changes ?? 0) === 1 ? token : null;
     },
+    async renew(key, lease, leaseS, at) {
+      const r = await db.prepare(`UPDATE ${t} SET lease_until = ? WHERE key = ? AND lease = ?`).bind(at + leaseS, key, lease).run();
+      return (r.meta.changes ?? 0) === 1;
+    },
     async release(key, lease) {
       await db.prepare(`UPDATE ${t} SET lease = NULL, lease_until = NULL WHERE key = ? AND lease = ?`).bind(key, lease).run();
+    },
+    async markDirty(key) {
+      await db.prepare(`UPDATE ${t} SET dirty = 1 WHERE key = ?`).bind(key).run();
+    },
+    async takeDirty(key, lease) {
+      const r = await db.prepare(`UPDATE ${t} SET dirty = 0 WHERE key = ? AND lease = ? AND dirty = 1`).bind(key, lease).run();
+      return (r.meta.changes ?? 0) === 1;
     }
   };
 }
@@ -74,11 +86,26 @@ function d1AvatarStore(db, options = {}) {
     }
   };
 }
+function sqliteD1(db) {
+  const stmt = (sql, params = []) => ({
+    bind: (...args) => stmt(sql, args),
+    async first(column) {
+      const row = db.prepare(sql).all(...params)[0];
+      if (!row) return null;
+      return column ? row[column] : { ...row };
+    },
+    async run() {
+      return { meta: { changes: Number(db.prepare(sql).run(...params).changes) } };
+    }
+  });
+  return { prepare: (sql) => stmt(sql) };
+}
 export {
   SCHEMA,
   avatarsSchema,
   d1AvatarStore,
   d1Store,
-  slotsSchema
+  slotsSchema,
+  sqliteD1
 };
 //# sourceMappingURL=d1.js.map

@@ -1,6 +1,6 @@
 import {
   toMsg
-} from "./chunk-LIS4UL2J.js";
+} from "./chunk-ZJWW4GA7.js";
 import "./chunk-YSTFV535.js";
 
 // src/receiver.ts
@@ -17,6 +17,7 @@ async function slackSignature(signingSecret, timestamp, body) {
 }
 async function verifySlackSignature(input) {
   const { signingSecret, body, timestamp, signature, toleranceS = 300 } = input;
+  if (!signingSecret) return { ok: false, reason: "missing_secret" };
   if (!timestamp || !signature) return { ok: false, reason: "missing_headers" };
   const ts = Number(timestamp);
   const nowS = input.nowS ?? Math.floor(Date.now() / 1e3);
@@ -35,7 +36,18 @@ async function verifySlackRequest(request, signingSecret, options = {}) {
   });
   return result.ok ? { ok: true, body } : result;
 }
+var isBlockActions = (p) => p.type === "block_actions";
+var isViewSubmission = (p) => p.type === "view_submission";
+var isMessageAction = (p) => p.type === "message_action";
+var isShortcut = (p) => p.type === "shortcut";
 function parseSlackBody(body, contentType) {
+  try {
+    return parseBody(body, contentType);
+  } catch {
+    return { kind: "unknown", raw: body };
+  }
+}
+function parseBody(body, contentType) {
   if ((contentType ?? "").includes("application/json")) {
     const json2 = JSON.parse(body);
     if (json2["type"] === "url_verification") return { kind: "url_verification", challenge: String(json2["challenge"]) };
@@ -71,12 +83,12 @@ function parseSlackBody(body, contentType) {
   }
   return { kind: "unknown", raw: form };
 }
-function viewValues(payload) {
+function viewValues(payload, options = {}) {
   const out = {};
-  for (const block of Object.values(payload.view?.state?.values ?? {})) {
+  for (const [blockId, block] of Object.entries(payload.view?.state?.values ?? {})) {
     for (const [actionId, raw] of Object.entries(block)) {
       const v = raw;
-      out[actionId] = v["value"] ?? v["selected_option"]?.value ?? v["selected_options"]?.map((o) => o.value) ?? v["selected_user"] ?? v["selected_users"] ?? v["selected_channel"] ?? v["selected_conversation"] ?? v["selected_date"] ?? v["selected_time"] ?? v["selected_date_time"] ?? null;
+      out[options.by === "block" ? blockId : actionId] = v["value"] ?? v["selected_option"]?.value ?? v["selected_options"]?.map((o) => o.value) ?? v["selected_user"] ?? v["selected_users"] ?? v["selected_channel"] ?? v["selected_conversation"] ?? v["selected_date"] ?? v["selected_time"] ?? v["selected_date_time"] ?? null;
     }
   }
   return out;
@@ -104,7 +116,7 @@ var viewErrors = (errors) => ({ response_action: "errors", errors });
 var ack = () => new Response(null, { status: 200 });
 var json = (body) => new Response(JSON.stringify(body), { status: 200, headers: { "content-type": "application/json; charset=utf-8" } });
 function slackHandler(options) {
-  const { signingSecret, onEvent, onInteraction, onCommand, ignoreEventRetries = true, onError } = options;
+  const { signingSecret, onEvent, onInteraction, onCommand, ignoreEventRetries = true, onError = (e) => console.error("slackHandler:", e) } = options;
   return async (request) => {
     if (request.method !== "POST") return new Response(null, { status: 405, headers: { allow: "POST" } });
     const contentType = request.headers.get("content-type");
@@ -113,8 +125,9 @@ function slackHandler(options) {
 `, { status: 401 });
     const retryNum = Number(request.headers.get("x-slack-retry-num") ?? 0);
     const pending = [];
-    const guard = (p) => p.catch((e) => onError?.(e));
+    const guard = (p) => p.catch((e) => onError(e));
     const ctx = {
+      request,
       retryNum,
       retryReason: request.headers.get("x-slack-retry-reason"),
       waitUntil: (p) => options.waitUntil ? options.waitUntil(guard(p)) : void pending.push(guard(p))
@@ -144,6 +157,10 @@ function slackHandler(options) {
   };
 }
 export {
+  isBlockActions,
+  isMessageAction,
+  isShortcut,
+  isViewSubmission,
   parseSlackBody,
   respond,
   slackHandler,

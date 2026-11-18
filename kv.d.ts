@@ -1,6 +1,7 @@
 import { AvatarStore } from './avatar.js';
-import { v as SlotStore } from './slots-BtvdSGce.js';
-import './core-C7X-hhBF.js';
+import { i as SlotState, j as SlotStore } from './slots-Dg6mOzxN.js';
+import './core-mTIXjUC4.js';
+import './slack-_HD6P5rZ.js';
 
 /**
  * `@open-athena/thrds/kv`: Cloudflare KV (or any get/put JSON store) for slot state and hosted avatars.
@@ -16,7 +17,26 @@ interface KVLike {
         expirationTtl?: number;
     }): Promise<void>;
 }
+/** How a store reads and writes its records; override to keep an existing record's shape. */
+interface SlotCodec {
+    decode(raw: string): SlotState | undefined;
+    encode(state: SlotState): string;
+}
+declare const JSON_CODEC: SlotCodec;
 declare function kvStore(kv: KVLike, options?: {
+    prefix?: string;
+    codec?: SlotCodec;
+}): SlotStore;
+/** A Durable Object's `ctx.storage` (structured values, strongly consistent, single-writer). */
+interface DurableStorageLike {
+    get<T = unknown>(key: string): Promise<T | undefined>;
+    put<T = unknown>(key: string, value: T): Promise<void>;
+}
+/**
+ * Slot state in Durable Object storage. Unlike KV it's strongly consistent, and the object serializes its own
+ * requests, so no leases are needed (or offered) as long as every sync for a key runs inside that object.
+ */
+declare function durableObjectStore(storage: DurableStorageLike, options?: {
     prefix?: string;
 }): SlotStore;
 /** Hosted avatars in KV, one key per sha (`{type, data: base64}`). */
@@ -24,4 +44,4 @@ declare function kvAvatarStore(kv: KVLike, options?: {
     prefix?: string;
 }): AvatarStore;
 
-export { type KVLike, kvAvatarStore, kvStore };
+export { type DurableStorageLike, JSON_CODEC, type KVLike, type SlotCodec, durableObjectStore, kvAvatarStore, kvStore };

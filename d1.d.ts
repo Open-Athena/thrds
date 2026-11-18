@@ -1,6 +1,7 @@
 import { AvatarStore } from './avatar.js';
-import { v as SlotStore } from './slots-BtvdSGce.js';
-import './core-C7X-hhBF.js';
+import { j as SlotStore } from './slots-Dg6mOzxN.js';
+import './core-mTIXjUC4.js';
+import './slack-_HD6P5rZ.js';
 
 /**
  * `@open-athena/thrds/d1`: Cloudflare D1 storage for slot state (with compare-and-swap leases) and hosted avatars.
@@ -37,5 +38,19 @@ declare function d1Store(db: D1Like, options?: {
 declare function d1AvatarStore(db: D1Like, options?: {
     table?: string;
 }): AvatarStore;
+/** A synchronous SQLite handle: `node:sqlite`'s `DatabaseSync`, or better-sqlite3's `Database`. */
+interface SqliteLike {
+    prepare(sql: string): {
+        all(...params: never[]): unknown[];
+        run(...params: never[]): {
+            changes: number | bigint;
+        };
+    };
+}
+/**
+ * A `D1Like` over a local SQLite database, so `d1Store` / `d1AvatarStore` (leases included) run on a Node host or in
+ * tests: `d1Store(sqliteD1(new DatabaseSync("bot.db")))`. Create the tables with `SCHEMA` first.
+ */
+declare function sqliteD1(db: SqliteLike): D1Like;
 
-export { type D1Like, type D1Statement, SCHEMA, avatarsSchema, d1AvatarStore, d1Store, slotsSchema };
+export { type D1Like, type D1Statement, SCHEMA, type SqliteLike, avatarsSchema, d1AvatarStore, d1Store, slotsSchema, sqliteD1 };

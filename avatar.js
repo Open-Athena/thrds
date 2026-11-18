@@ -10,6 +10,8 @@ import {
   badgedSvg,
   base64,
   dataUri,
+  derivedAvatarHandler,
+  derivedAvatarUrl,
   fetchFace,
   identiconPng,
   identiconSeed,
@@ -20,7 +22,7 @@ import {
   sha256Hex,
   sniffImage,
   unbase64
-} from "./chunk-UJ6N63EC.js";
+} from "./chunk-5HP3RLKL.js";
 import "./chunk-YSTFV535.js";
 export {
   AVATAR_PATH,
@@ -34,6 +36,8 @@ export {
   badgedSvg,
   base64,
   dataUri,
+  derivedAvatarHandler,
+  derivedAvatarUrl,
   fetchFace,
   identiconPng,
   identiconSeed,

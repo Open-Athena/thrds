@@ -1,6 +1,6 @@
 {
   "name": "@open-athena/thrds",
-  "version": "0.2.0-dist.59e16e9",
+  "version": "0.2.0-dist.0d6869f",
   "description": "Slack toolkit + declarative thread sync: transport, rich messages, slotted threads over pluggable stores (D1/KV), a request receiver, and badged sender avatars",
   "license": "MIT",
   "author": "Ryan Williams",
@@ -30,24 +30,35 @@
   "exports": {
     ".": {
       "types": "./index.d.ts",
-      "import": "./index.js"
+      "import": "./index.js",
+      "default": "./index.js"
     },
     "./avatar": {
       "types": "./avatar.d.ts",
-      "import": "./avatar.js"
+      "import": "./avatar.js",
+      "default": "./avatar.js"
     },
     "./d1": {
       "types": "./d1.d.ts",
-      "import": "./d1.js"
+      "import": "./d1.js",
+      "default": "./d1.js"
     },
     "./kv": {
       "types": "./kv.d.ts",
-      "import": "./kv.js"
+      "import": "./kv.js",
+      "default": "./kv.js"
     },
     "./receiver": {
       "types": "./receiver.d.ts",
-      "import": "./receiver.js"
-    }
+      "import": "./receiver.js",
+      "default": "./receiver.js"
+    },
+    "./testing": {
+      "types": "./testing.d.ts",
+      "import": "./testing.js",
+      "default": "./testing.js"
+    },
+    "./schema/thrds.sql": "./thrds.sql"
   },
   "engines": {
     "node": ">=18"

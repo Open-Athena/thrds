@@ -127,6 +127,8 @@ interface BadgedAvatarOptions {
     fetch?: typeof fetch;
     /** Memo across calls (per isolate). Pass one Map per app; omit to always render. */
     memo?: Map<string, string>;
+    /** The memo key for a bytes face (an identicon), which has no URL to key on: e.g. `id:<email>`. */
+    memoKey?: string;
     onError?: (e: unknown) => void;
 }
 /**
@@ -134,5 +136,29 @@ interface BadgedAvatarOptions {
  * be made (no face, an undecodable one, a non-https origin, a render failure): the caller posts with the plain face.
  */
 declare function badgedAvatarUrl(face: string | Image | null, badge: Badge, options: BadgedAvatarOptions): Promise<string | null>;
+/**
+ * A badged-avatar URL that needs no storage: `<origin><prefix>/<id>/<key>.png`, where `key` = `avatarKey(faceUrl, …)`.
+ * Serve it with `derivedAvatarHandler`, which re-renders from the person's *current* face and 404s a stale or forged
+ * key. For stateless hosts (Cloud Run, a fresh isolate) where a content-addressed `publishAvatar` store can't persist.
+ */
+declare function derivedAvatarUrl(origin: string, id: string, faceUrl: string, badge: Badge, options?: {
+    style?: BadgeStyle;
+    prefix?: string;
+}): string;
+interface DerivedAvatarOptions {
+    /** The current face URL for an id (e.g. the Slack user's `image_192`), or null if unknown. */
+    resolveFace: (id: string) => Promise<string | null>;
+    badge: Badge;
+    rasterize: Rasterize;
+    style?: BadgeStyle;
+    px?: number;
+    prefix?: string;
+    fetch?: typeof fetch;
+    /** Rendered PNGs kept in memory (by key). Default 256. */
+    cacheSize?: number;
+    onError?: (e: unknown) => void;
+}
+/** A GET/HEAD handler for `derivedAvatarUrl`s; returns null for paths outside `prefix` so it composes with a router. */
+declare function derivedAvatarHandler(options: DerivedAvatarOptions): (request: Request) => Promise<Response | null>;
 
-export { AVATAR_PATH, type AvatarStore, BADGES, type Badge, type BadgeStyle, type BadgedAvatarOptions, GLYPHS, type Image, type Rasterize, SERVICE_ICON, avatarKey, avatarPath, avatarResponse, badgedAvatarUrl, badgedSvg, base64, dataUri, fetchFace, identiconPng, identiconSeed, memoryAvatarStore, publishAvatar, readAvatar, serviceIconPng, sha256Hex, sniffImage, unbase64 };
+export { AVATAR_PATH, type AvatarStore, BADGES, type Badge, type BadgeStyle, type BadgedAvatarOptions, type DerivedAvatarOptions, GLYPHS, type Image, type Rasterize, SERVICE_ICON, avatarKey, avatarPath, avatarResponse, badgedAvatarUrl, badgedSvg, base64, dataUri, derivedAvatarHandler, derivedAvatarUrl, fetchFace, identiconPng, identiconSeed, memoryAvatarStore, publishAvatar, readAvatar, serviceIconPng, sha256Hex, sniffImage, unbase64 };

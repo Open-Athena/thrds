@@ -207,7 +207,7 @@ async function avatarResponse(store, request, prefix = "/a") {
 async function badgedAvatarUrl(face, badge, options) {
   const { store, origin, rasterize, style = "fold", px = 256, prefix, fetch: fetchImpl, memo, onError } = options;
   if (!origin.startsWith("https://") || face === null) return null;
-  const memoKey = typeof face === "string" ? avatarKey(face, badge, style) : null;
+  const memoKey = typeof face === "string" ? avatarKey(face, badge, style) : options.memoKey !== void 0 ? avatarKey(options.memoKey, badge, style) : null;
   const hit = memoKey !== null ? memo?.get(memoKey) : void 0;
   if (hit !== void 0) return hit;
   try {
@@ -221,6 +221,47 @@ async function badgedAvatarUrl(face, badge, options) {
     onError?.(e);
     return null;
   }
+}
+function derivedAvatarUrl(origin, id, faceUrl, badge, options = {}) {
+  const { style = "fold", prefix = "/avatars" } = options;
+  return `${origin.replace(/\/+$/, "")}${prefix}/${encodeURIComponent(id)}/${avatarKey(faceUrl, badge, style)}.png`;
+}
+function derivedAvatarHandler(options) {
+  const { resolveFace, badge, rasterize, style = "fold", px = 256, prefix = "/avatars", fetch: fetchImpl, cacheSize = 256, onError } = options;
+  const cache = /* @__PURE__ */ new Map();
+  const path = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^/]+)/([0-9a-f]{14})\\.png$`);
+  return async (request) => {
+    const url = new URL(request.url);
+    if (!url.pathname.startsWith(`${prefix}/`)) return null;
+    if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
+    const m = path.exec(url.pathname);
+    if (!m) return notFound();
+    const id = decodeURIComponent(m[1]);
+    const key = m[2];
+    let png2 = cache.get(key);
+    if (png2 === void 0) {
+      try {
+        const face = await resolveFace(id);
+        if (face === null || avatarKey(face, badge, style) !== key) return notFound();
+        const img = await fetchFace(face, fetchImpl ? { fetch: fetchImpl } : {});
+        if (img === null) return notFound();
+        png2 = await rasterize(badgedSvg(dataUri(img), badge, style, px));
+      } catch (e) {
+        onError?.(e);
+        return notFound();
+      }
+      cache.set(key, png2);
+      if (cache.size > cacheSize) cache.delete(cache.keys().next().value);
+    }
+    return new Response(request.method === "HEAD" ? null : new Uint8Array(png2), {
+      headers: {
+        "content-type": "image/png",
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'"
+      }
+    });
+  };
 }
 
 export {
@@ -244,6 +285,8 @@ export {
   publishAvatar,
   readAvatar,
   avatarResponse,
-  badgedAvatarUrl
+  badgedAvatarUrl,
+  derivedAvatarUrl,
+  derivedAvatarHandler
 };
-//# sourceMappingURL=chunk-UJ6N63EC.js.map
+//# sourceMappingURL=chunk-5HP3RLKL.js.map

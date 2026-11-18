@@ -1,4 +1,4 @@
-import { d as MsgLike } from './core-C7X-hhBF.js';
+import { d as MsgLike } from './core-mTIXjUC4.js';
 
 /**
  * `@open-athena/thrds/receiver`: the inbound half of a Slack app (Events API, interactivity, slash commands), on Web
@@ -22,7 +22,7 @@ interface VerifyInput {
     /** Reject requests older (or newer) than this, against replays. Default 300 s, Slack's recommendation. */
     toleranceS?: number;
 }
-type VerifyFailure = "missing_headers" | "stale" | "bad_signature";
+type VerifyFailure = "missing_secret" | "missing_headers" | "stale" | "bad_signature";
 type VerifyResult = {
     ok: true;
 } | {
@@ -54,47 +54,93 @@ interface SlashCommand {
     triggerId: string;
     responseUrl: string;
 }
+interface InteractionUser {
+    id: string;
+    username?: string;
+    name?: string;
+    team_id?: string;
+}
+interface InteractionMessage {
+    ts: string;
+    text?: string;
+    user?: string;
+    bot_id?: string;
+    thread_ts?: string;
+    blocks?: unknown[];
+    attachments?: unknown[];
+    [k: string]: unknown;
+}
+interface ViewState {
+    id: string;
+    hash?: string;
+    callback_id?: string;
+    external_id?: string;
+    private_metadata?: string;
+    state?: {
+        values: Record<string, Record<string, unknown>>;
+    };
+    [k: string]: unknown;
+}
+interface BlockAction {
+    action_id: string;
+    block_id?: string;
+    value?: string;
+    type: string;
+    [k: string]: unknown;
+}
 /** An interaction payload (`block_actions`, `view_submission`, `view_closed`, `shortcut`, `message_action`, …). */
 interface Interaction {
     type: string;
-    user?: {
-        id: string;
-        username?: string;
-        name?: string;
-        team_id?: string;
-    };
+    user?: InteractionUser;
     trigger_id?: string;
     response_url?: string;
-    actions?: Array<{
-        action_id: string;
-        block_id?: string;
-        value?: string;
-        type: string;
-        [k: string]: unknown;
-    }>;
-    view?: {
-        id: string;
-        hash?: string;
-        callback_id?: string;
-        private_metadata?: string;
-        state?: {
-            values: Record<string, Record<string, unknown>>;
-        };
-        [k: string]: unknown;
-    };
+    actions?: BlockAction[];
+    view?: ViewState;
     callback_id?: string;
     channel?: {
         id: string;
         name?: string;
     };
-    message?: {
-        ts: string;
-        text?: string;
-        [k: string]: unknown;
-    };
+    message?: InteractionMessage;
     container?: Record<string, unknown>;
     [k: string]: unknown;
 }
+/** A button / select click in a message or view. */
+interface BlockActionsPayload extends Interaction {
+    type: "block_actions";
+    user: InteractionUser;
+    trigger_id: string;
+    actions: BlockAction[];
+}
+interface ViewSubmissionPayload extends Interaction {
+    type: "view_submission";
+    user: InteractionUser;
+    view: ViewState;
+}
+/** A message shortcut ("…" menu on a message). */
+interface MessageActionPayload extends Interaction {
+    type: "message_action";
+    user: InteractionUser;
+    callback_id: string;
+    trigger_id: string;
+    response_url: string;
+    channel: {
+        id: string;
+        name?: string;
+    };
+    message: InteractionMessage;
+}
+/** A global shortcut (lightning-bolt menu). */
+interface ShortcutPayload extends Interaction {
+    type: "shortcut";
+    user: InteractionUser;
+    callback_id: string;
+    trigger_id: string;
+}
+declare const isBlockActions: (p: Interaction) => p is BlockActionsPayload;
+declare const isViewSubmission: (p: Interaction) => p is ViewSubmissionPayload;
+declare const isMessageAction: (p: Interaction) => p is MessageActionPayload;
+declare const isShortcut: (p: Interaction) => p is ShortcutPayload;
 type SlackBody = {
     kind: "url_verification";
     challenge: string;
@@ -117,10 +163,15 @@ type SlackBody = {
     kind: "unknown";
     raw: unknown;
 };
-/** Parse a (verified) request body by its content type. */
+/** Parse a (verified) request body by its content type; a malformed one is `unknown`, never a throw. */
 declare function parseSlackBody(body: string, contentType: string | null): SlackBody;
-/** A view submission's input values, flattened to `{ [actionId]: value }` (text, selects, dates, checkboxes). */
-declare function viewValues(payload: Interaction): Record<string, unknown>;
+/**
+ * A view submission's input values, flattened (text, selects, dates, checkboxes): by `action_id` (default), or by
+ * `block_id` when every input shares one action id and blocks tell them apart.
+ */
+declare function viewValues<T extends Record<string, unknown> = Record<string, unknown>>(payload: Interaction, options?: {
+    by?: "action" | "block";
+}): T;
 interface RespondOptions {
     /** Default `ephemeral` (only the user who acted sees it). */
     responseType?: "ephemeral" | "in_channel";
@@ -134,6 +185,8 @@ declare function respond(responseUrl: string, m: MsgLike | null, options?: Respo
 /** A view submission's field errors (keyed by block id): Slack shows them inline instead of closing the modal. */
 declare const viewErrors: (errors: Record<string, string>) => Record<string, unknown>;
 interface HandlerContext {
+    /** The request (its body is already read: use the parsed payload). */
+    request: Request;
     /** Slack's delivery retry (`X-Slack-Retry-Num`), or 0 for a first delivery. */
     retryNum: number;
     retryReason: string | null;
@@ -151,13 +204,18 @@ interface SlackHandlerOptions {
     /** Must finish within Slack's 3 s; defer slow work with `ctx.waitUntil` and reply via `respond`. */
     onInteraction?: (payload: Interaction, ctx: HandlerContext) => Promise<HandlerReply> | HandlerReply;
     onCommand?: (command: SlashCommand, ctx: HandlerContext) => Promise<HandlerReply> | HandlerReply;
+    /**
+     * Run work after the ack: a Worker's `ctx.waitUntil`, or Next.js's `after` from `next/server`. Without one, deferred
+     * work is awaited before the response is returned, which on Node can blow Slack's 3 s ack budget.
+     */
     waitUntil?: (p: Promise<unknown>) => void;
     /** Drop Events API retries (Slack re-sends when an ack is late). Default true: handlers needn't be idempotent. */
     ignoreEventRetries?: boolean;
     nowS?: () => number;
+    /** Failures in deferred work (default `console.error`: never swallowed silently). */
     onError?: (e: unknown) => void;
 }
 /** A `fetch`-style handler for one Slack request URL (events, interactivity and commands can share it). */
 declare function slackHandler(options: SlackHandlerOptions): (request: Request) => Promise<Response>;
 
-export { type HandlerContext, type HandlerReply, type Interaction, type RespondOptions, type SlackBody, type SlackHandlerOptions, type SlashCommand, type VerifyFailure, type VerifyInput, type VerifyResult, parseSlackBody, respond, slackHandler, slackSignature, verifySlackRequest, verifySlackSignature, viewErrors, viewValues };
+export { type BlockAction, type BlockActionsPayload, type HandlerContext, type HandlerReply, type Interaction, type InteractionMessage, type InteractionUser, type MessageActionPayload, type RespondOptions, type ShortcutPayload, type SlackBody, type SlackHandlerOptions, type SlashCommand, type VerifyFailure, type VerifyInput, type VerifyResult, type ViewState, type ViewSubmissionPayload, isBlockActions, isMessageAction, isShortcut, isViewSubmission, parseSlackBody, respond, slackHandler, slackSignature, verifySlackRequest, verifySlackSignature, viewErrors, viewValues };

@@ -32,11 +32,12 @@ function msgHash(m) {
     stableStringify({
       text: msg.text,
       blocks: msg.blocks,
+      attachments: msg.attachments,
       metadata: msg.metadata ? { event_type: msg.metadata.event_type, event_payload: payload } : void 0
     })
   );
 }
-var isRich = (m) => typeof m !== "string" && (m.blocks !== void 0 || m.metadata !== void 0);
+var isRich = (m) => typeof m !== "string" && (m.blocks !== void 0 || m.attachments !== void 0 || m.metadata !== void 0);
 var contentKey = (m) => isRich(m) ? `thrds:${msgHash(m)}` : toMsg(m).text;
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 async function sync(client, desired, threadId, options = {}) {
@@ -179,4 +180,4 @@ export {
   contentKey,
   sync
 };
-//# sourceMappingURL=chunk-LIS4UL2J.js.map
+//# sourceMappingURL=chunk-ZJWW4GA7.js.map
