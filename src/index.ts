@@ -86,4 +86,4 @@ export type {
   SlotSyncResult,
   SlotThread,
 } from "./slots";
-export { LeaseLostError, SLOT_KEY, SLOT_NAME, memoryStore, syncSlots, tagSlot, upsert } from "./slots";
+export { LeaseLostError, SLOT_KEY, SLOT_NAME, memoryStore, syncSlots, tagSlot, threadStore, upsert } from "./slots";

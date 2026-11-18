@@ -356,3 +356,74 @@ export async function badgedAvatarUrl(
     return null;
   }
 }
+
+/* ---- derived (stateless) avatars ---- */
+
+/**
+ * A badged-avatar URL that needs no storage: `<origin><prefix>/<id>/<key>.png`, where `key` = `avatarKey(faceUrl, …)`.
+ * Serve it with `derivedAvatarHandler`, which re-renders from the person's *current* face and 404s a stale or forged
+ * key. For stateless hosts (Cloud Run, a fresh isolate) where a content-addressed `publishAvatar` store can't persist.
+ */
+export function derivedAvatarUrl(
+  origin: string,
+  id: string,
+  faceUrl: string,
+  badge: Badge,
+  options: { style?: BadgeStyle; prefix?: string } = {},
+): string {
+  const { style = "fold", prefix = "/avatars" } = options;
+  return `${origin.replace(/\/+$/, "")}${prefix}/${encodeURIComponent(id)}/${avatarKey(faceUrl, badge, style)}.png`;
+}
+
+export interface DerivedAvatarOptions {
+  /** The current face URL for an id (e.g. the Slack user's `image_192`), or null if unknown. */
+  resolveFace: (id: string) => Promise<string | null>;
+  badge: Badge;
+  rasterize: Rasterize;
+  style?: BadgeStyle;
+  px?: number;
+  prefix?: string;
+  fetch?: typeof fetch;
+  /** Rendered PNGs kept in memory (by key). Default 256. */
+  cacheSize?: number;
+  onError?: (e: unknown) => void;
+}
+
+/** A GET/HEAD handler for `derivedAvatarUrl`s; returns null for paths outside `prefix` so it composes with a router. */
+export function derivedAvatarHandler(options: DerivedAvatarOptions): (request: Request) => Promise<Response | null> {
+  const { resolveFace, badge, rasterize, style = "fold", px = 256, prefix = "/avatars", fetch: fetchImpl, cacheSize = 256, onError } = options;
+  const cache = new Map<string, Uint8Array>();
+  const path = new RegExp(`^${prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/([^/]+)/([0-9a-f]{14})\\.png$`);
+  return async (request) => {
+    const url = new URL(request.url);
+    if (!url.pathname.startsWith(`${prefix}/`)) return null;
+    if (request.method !== "GET" && request.method !== "HEAD") return new Response(null, { status: 405, headers: { allow: "GET, HEAD" } });
+    const m = path.exec(url.pathname);
+    if (!m) return notFound();
+    const id = decodeURIComponent(m[1]!);
+    const key = m[2]!;
+    let png = cache.get(key);
+    if (png === undefined) {
+      try {
+        const face = await resolveFace(id);
+        if (face === null || avatarKey(face, badge, style) !== key) return notFound();
+        const img = await fetchFace(face, fetchImpl ? { fetch: fetchImpl } : {});
+        if (img === null) return notFound();
+        png = await rasterize(badgedSvg(dataUri(img), badge, style, px));
+      } catch (e) {
+        onError?.(e);
+        return notFound();
+      }
+      cache.set(key, png);
+      if (cache.size > cacheSize) cache.delete(cache.keys().next().value!);
+    }
+    return new Response(request.method === "HEAD" ? null : new Uint8Array(png), {
+      headers: {
+        "content-type": "image/png",
+        "cache-control": "public, max-age=31536000, immutable",
+        "x-content-type-options": "nosniff",
+        "content-security-policy": "default-src 'none'",
+      },
+    });
+  };
+}

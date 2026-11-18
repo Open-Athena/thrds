@@ -10,7 +10,7 @@
  * and slot. A run that finds a leftover `pending` looks for the tagged message and adopts it instead of posting twice.
  */
 import { SlackApiError } from "./api";
-import { msgHash, toMsg, type Msg, type MsgLike } from "./core";
+import { THRDS_HASH, msgHash, toMsg, type Msg, type MsgLike } from "./core";
 import type { SlackClient, SlackMessage } from "./slack";
 
 /** Where a slot's message lives, and a hash of what was last sent there. */
@@ -347,6 +347,40 @@ export function memoryStore(initial: Record<string, SlotState> = {}): SlotStore 
     },
     dump() {
       return Object.fromEntries([...states].map(([k, v]) => [k, JSON.parse(v) as SlotState]));
+    },
+  };
+}
+
+/**
+ * A store that keeps nothing: slot state is rebuilt from the thread itself, since every slot post carries its key, slot
+ * and content hash in its metadata. For bots with no database that reply under a known thread (one echo per person
+ * under a prompt). A post that landed before a crash is simply found on the next read, so there's no `pending` to keep.
+ * No leases: two concurrent runs can both post a new slot.
+ */
+export function threadStore(client: SlackClient, threadTs: string): SlotStore {
+  return {
+    async get(key) {
+      let messages: SlackMessage[];
+      try {
+        messages = await client.list(threadTs);
+      } catch (e) {
+        if (isThreadGone(e)) return undefined;
+        throw e;
+      }
+      const state: SlotState = { slots: {} };
+      for (const m of messages) {
+        const payload = m.metadata?.event_payload;
+        if (!payload || payload[SLOT_KEY] !== key || !m.editable) continue;
+        const stamped = payload[THRDS_HASH];
+        const record = { ts: m.id, hash: typeof stamped === "string" ? stamped : "" };
+        const slot = payload[SLOT_NAME];
+        if (slot === "") state.parent = record;
+        else if (typeof slot === "string" && !(slot in state.slots)) state.slots[slot] = record;
+      }
+      return state;
+    },
+    async put() {
+      return true;
     },
   };
 }

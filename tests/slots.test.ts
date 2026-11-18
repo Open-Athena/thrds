@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { msgHash } from "../src/core";
-import { LeaseLostError, memoryStore, syncSlots, tagSlot, upsert, type SlotStore } from "../src/slots";
+import { LeaseLostError, memoryStore, syncSlots, tagSlot, threadStore, upsert, type SlotStore } from "../src/slots";
 import { fakeChannel } from "./helpers";
 
 const burst = (details: string, errors?: string) => ({
@@ -230,5 +230,32 @@ describe("upsert", () => {
       ],
       [["post", "3 nodes up"], ["edit", "2 nodes up"]],
     ]);
+  });
+});
+
+describe("threadStore (no database: state rebuilt from the thread's tags)", () => {
+  const prompt = { ts: "50.000000", text: "What did you do this week?", user: "U_ISAAC" };
+  const echo = (who: string, text: string) => ({ slot: who, msg: { text, username: who } });
+  const week = (slots: ReturnType<typeof echo>[]) => ({ key: "week:2026-11-13", parent: { ts: "50.000000" }, slots });
+
+  it("finds existing echoes on every run, editing in place and posting only new ones", async () => {
+    const { client, messages, writes } = fakeChannel({ messages: [prompt] });
+    const store = threadStore(client, "50.000000");
+    await syncSlots(client, store, week([echo("U_ANN", "ann v1")]));
+    const second = await syncSlots(client, store, week([echo("U_ANN", "ann v1"), echo("U_BOB", "bob v1")]));
+    const third = await syncSlots(client, store, week([echo("U_ANN", "ann v2"), echo("U_BOB", "bob v1")]));
+    expect([kinds(second), kinds(third), writes, messages.length]).toEqual([
+      [["SKIP", "U_ANN"], ["POST", "U_BOB"]],
+      [["EDIT", "U_ANN"], ["SKIP", "U_BOB"]],
+      [["post", "ann v1"], ["post", "bob v1"], ["edit", "ann v2"]],
+      3,
+    ]);
+  });
+
+  it("ignores another key's slots and messages that aren't ours", async () => {
+    const forged = { ts: "60.000000", text: "x", thread_ts: "50.000000", user: "U_EVE", metadata: { event_type: "thrds_slot", event_payload: { thrds_key: "week:2026-11-13", thrds_slot: "U_ANN", thrds_hash: "0" } } };
+    const { client } = fakeChannel({ messages: [prompt, forged] });
+    await syncSlots(client, memoryStore(), { key: "week:2026-11-06", parent: { ts: "50.000000" }, slots: [echo("U_ANN", "old week")] });
+    expect(await threadStore(client, "50.000000").get("week:2026-11-13")).toEqual({ slots: {} });
   });
 });

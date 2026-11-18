@@ -7,6 +7,8 @@ import {
   avatarResponse,
   badgedAvatarUrl,
   badgedSvg,
+  derivedAvatarHandler,
+  derivedAvatarUrl,
   identiconPng,
   identiconSeed,
   memoryAvatarStore,
@@ -158,5 +160,39 @@ describe("hosting", () => {
       svgs[0]!.startsWith('<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 100 100"><image href="data:image/png;base64,'),
       store.size(),
     ]).toEqual([`${ORIGIN}/a/${await sha256Hex(serviceIconPng(32))}.png`, url, null, null, ["https://img/ann.png", "https://img/nobody.png"], 1, true, 1]);
+  });
+});
+
+describe("derived (stateless) avatars", () => {
+  it("serve a URL whose key matches the person's current face, re-rendering on a cold cache; 404 a stale or forged key", async () => {
+    const png = serviceIconPng(24);
+    let face = "https://img/ann-v1.png";
+    let renders = 0;
+    const fetchImpl = (async () => new Response(png)) as unknown as typeof fetch;
+    const make = () =>
+      derivedAvatarHandler({
+        resolveFace: async (id) => (id === "U_ANN" ? face : null),
+        badge: BADGES.automated,
+        rasterize: () => (renders++, serviceIconPng(32)),
+        fetch: fetchImpl,
+      });
+    const handler = make();
+    const url = derivedAvatarUrl("https://bot.run.app/", "U_ANN", face, BADGES.automated);
+    const status = async (h: ReturnType<typeof make>, u: string) => (await h(new Request(u)))?.status ?? null;
+    const first = await status(handler, url);
+    const cached = await status(handler, url);
+    const coldInstance = await status(make(), url);
+    face = "https://img/ann-v2.png"; // a new photo: the old key no longer resolves
+    const stale = await status(make(), url);
+    expect([
+      url,
+      first,
+      cached,
+      coldInstance,
+      renders,
+      stale,
+      await status(handler, "https://bot.run.app/avatars/U_NOBODY/0123456789abcd.png"),
+      await status(handler, "https://bot.run.app/elsewhere"),
+    ]).toEqual([`https://bot.run.app/avatars/U_ANN/${avatarKey("https://img/ann-v1.png", BADGES.automated)}.png`, 200, 200, 200, 2, 404, 404, null]);
   });
 });
