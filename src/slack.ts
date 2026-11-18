@@ -339,8 +339,17 @@ export class SlackClient implements ThreadClient {
     match: (payload: Record<string, unknown>) => boolean = () => true,
     options: { threadTs?: string; oldest?: string } = {},
   ): Promise<SlackMessage | null> {
-    const hit = (m: SlackMessage): boolean =>
-      m.metadata?.event_type === eventType && match(m.metadata.event_payload ?? {});
+    return this.find(
+      (m) => m.metadata?.event_type === eventType && match(m.metadata.event_payload ?? {}),
+      options,
+    );
+  }
+
+  /** The first message satisfying `hit`: in a thread (`threadTs`), else the channel's history back to `oldest`. */
+  async find(
+    hit: (m: SlackMessage) => boolean,
+    options: { threadTs?: string; oldest?: string } = {},
+  ): Promise<SlackMessage | null> {
     if (options.threadTs !== undefined) {
       return (await this.list(options.threadTs)).find(hit) ?? null;
     }

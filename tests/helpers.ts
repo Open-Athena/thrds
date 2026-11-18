@@ -61,3 +61,69 @@ export function client(
   const { sleep, waits } = fakeSleep();
   return { client: new SlackClient({ token: "xoxb-t", channel: "C1", fetch, sleep, ...options }), calls, waits };
 }
+
+export interface FakeMessage {
+  ts: string;
+  text: string;
+  thread_ts?: string;
+  bot_id?: string;
+  user?: string;
+  username?: string;
+  blocks?: unknown[];
+  metadata?: { event_type: string; event_payload: Record<string, unknown> };
+}
+
+/**
+ * A stateful fake channel: `chat.postMessage` / `update` / `delete`, `conversations.replies` / `history`, and
+ * `auth.test`, behaving like Slack (ts assignment, threads, metadata, `message_not_found`). `writes` lists every write.
+ */
+export function fakeChannel(options: { messages?: FakeMessage[] } = {}) {
+  const messages: FakeMessage[] = [...(options.messages ?? [])];
+  let n = 100;
+  const writes: Array<[string, string]> = [];
+  const err = (error: string): Reply => ({ body: { ok: false, error } });
+  const routes: Record<string, Route> = {
+    "auth.test": AUTH,
+    "chat.postMessage": ({ body }) => {
+      if (body["thread_ts"] && !messages.some((x) => x.ts === body["thread_ts"])) return err("thread_not_found");
+      const ts = `${++n}.000000`;
+      const m: FakeMessage = { ts, text: body["text"] as string, bot_id: "B_BOT" };
+      if (body["thread_ts"]) m.thread_ts = body["thread_ts"] as string;
+      if (body["username"]) m.username = body["username"] as string;
+      if (body["blocks"]) m.blocks = body["blocks"] as unknown[];
+      if (body["metadata"]) m.metadata = body["metadata"] as FakeMessage["metadata"];
+      messages.push(m);
+      writes.push(["post", m.text]);
+      return { body: { ok: true, ts } };
+    },
+    "chat.update": ({ body }) => {
+      const m = messages.find((x) => x.ts === body["ts"]);
+      if (!m) return err("message_not_found");
+      m.text = body["text"] as string;
+      if (body["blocks"]) m.blocks = body["blocks"] as unknown[];
+      if (body["metadata"]) m.metadata = body["metadata"] as FakeMessage["metadata"];
+      writes.push(["edit", m.text]);
+      return { body: { ok: true, ts: m.ts } };
+    },
+    "chat.delete": ({ body }) => {
+      const i = messages.findIndex((x) => x.ts === body["ts"]);
+      if (i < 0) return err("message_not_found");
+      writes.push(["delete", messages[i]!.text]);
+      messages.splice(i, 1);
+      return { body: { ok: true } };
+    },
+    "conversations.replies": ({ body }) => {
+      const ts = body["ts"] as string;
+      const parent = messages.find((x) => x.ts === ts);
+      if (!parent) return err("thread_not_found");
+      return { body: { ok: true, messages: [parent, ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)] } };
+    },
+    "conversations.history": ({ body }) => {
+      const oldest = Number(body["oldest"] ?? 0);
+      const top = messages.filter((x) => !x.thread_ts && Number(x.ts) >= oldest).reverse();
+      return { body: { ok: true, messages: top } };
+    },
+  };
+  const { client: c, calls } = client(routes);
+  return { client: c, calls, messages, writes };
+}

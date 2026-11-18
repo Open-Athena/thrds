@@ -74,3 +74,16 @@ export {
   defaultBullet,
   splitBody,
 } from "./linked";
+
+export type {
+  SlotAction,
+  SlotActionType,
+  SlotRecord,
+  SlotSpec,
+  SlotState,
+  SlotStore,
+  SlotSyncOptions,
+  SlotSyncResult,
+  SlotThread,
+} from "./slots";
+export { LeaseLostError, SLOT_KEY, SLOT_NAME, memoryStore, syncSlots, tagSlot, upsert } from "./slots";
