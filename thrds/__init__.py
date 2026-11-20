@@ -5,7 +5,17 @@ from .linked import LinkedSyncResult, LinkedThread, Section
 from .lint import BskyLinter, DiscordLinter, LintIssue, LintReport, MastodonLinter
 from .mastodon import MastodonClient
 from .protocol import ThreadClient
-from .slack import FilesNotAttachedError, RecoveredSession, ScanCapReached, SlackApiError, SlackClient
+from .slack import (
+    FileNotProcessedError,
+    FileSwap,
+    FileSwapError,
+    FilesNotAttachedError,
+    RecoveredSession,
+    ScanCapReached,
+    SlackApiError,
+    SlackClient,
+    is_processed,
+)
 from .state import SessionState, StagingChrome, ThreadEntry, ThreadTarget
 from .threadfile import ThreadFile, thread_files, thread_filename
 
@@ -40,9 +50,13 @@ __all__ = [
     "SenderChangeForbidden",
     "SenderChangePolicy",
     "SessionState",
+    "FileNotProcessedError",
+    "FileSwap",
+    "FileSwapError",
     "FilesNotAttachedError",
     "SlackApiError",
     "SlackClient",
+    "is_processed",
     "StagingChrome",
     "SyncOptions",
     "SyncResult",

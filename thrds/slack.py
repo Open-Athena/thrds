@@ -10,7 +10,7 @@ from collections.abc import Callable, Iterable, Iterator, Sequence
 from dataclasses import dataclass, field, replace
 from itertools import islice
 from pathlib import Path
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 
 from .chrome import (
@@ -124,11 +124,78 @@ def _slack_icon_url(msg: dict) -> str | None:
 
 class SlackApiError(RuntimeError):
     """A Slack Web API call that failed: ``code`` is Slack's error string
-    (``file_not_found``, ``channel_not_found``, …) or ``http_<status>``."""
+    (``file_not_found``, ``channel_not_found``, …), ``http_<status>``,
+    ``timeout`` or ``transport_error``."""
     def __init__(self, endpoint: str, code: str, message: str | None = None):
         super().__init__(message or f"Slack API error: {code}")
         self.endpoint = endpoint
         self.code = code
+
+    @property
+    def definite(self) -> bool:
+        """Whether the request certainly did nothing: Slack refused it, or a
+        4xx. False for a 5xx, a timeout or a dropped connection, after which a
+        write may have landed."""
+        if self.code.startswith("http_"):
+            status = self.code[len("http_"):]
+            return status.isdigit() and 400 <= int(status) < 500
+        return self.code not in ("timeout", "transport_error")
+
+
+class FileNotProcessedError(RuntimeError):
+    """Slack hadn't processed an upload in time. An unshared one is deleted
+    (``deleted``), since nothing can use it."""
+    def __init__(self, file_id: str, waited: float, deleted: bool):
+        super().__init__(
+            f"Slack hadn't processed file {file_id} after {waited:g} s" + (" (deleted it)" if deleted else "")
+        )
+        self.file_id = file_id
+        self.waited = waited
+        self.deleted = deleted
+
+
+class FileSwapError(RuntimeError):
+    """Attaching a newly uploaded file failed (``__cause__``). If Slack
+    definitely refused the write, the upload was deleted (``deleted``);
+    otherwise the write may have landed, so the file is kept."""
+    def __init__(self, file_id: str, deleted: bool):
+        super().__init__(
+            f"attaching file {file_id} failed ("
+            + ("deleted the upload" if deleted else "kept the upload: the write may have landed")
+            + ")"
+        )
+        self.file_id = file_id
+        self.deleted = deleted
+
+
+@dataclass
+class FileSwap:
+    """What `replace_file` did: the new file's id, and which replaced files
+    were deleted, or couldn't be (``undeleted``: ``(id, error)`` pairs)."""
+    file_id: str
+    deleted: list[str] = field(default_factory=list)
+    undeleted: list[tuple[str, Exception]] = field(default_factory=list)
+
+
+_THUMB = re.compile(r"^thumb_\d+$")
+
+
+def is_processed(file: dict) -> bool:
+    """Whether Slack has processed an upload (``files.info``'s ``file``): it
+    reports a ``mimetype``, and an image has thumbnails (``thumb_<n>``), which
+    can lag the ``mimetype`` briefly."""
+    mimetype = file.get("mimetype")
+    if not isinstance(mimetype, str) or not mimetype:
+        return False
+    return not mimetype.startswith("image/") or any(_THUMB.match(k) for k in file)
+
+
+def _definitely_not_attached(e: BaseException) -> bool:
+    if isinstance(e, SlackApiError):
+        return e.definite
+    if isinstance(e, FilesNotAttachedError):
+        return isinstance(e.__cause__, SlackApiError) and e.__cause__.definite
+    return False
 
 
 class FilesNotAttachedError(RuntimeError):
@@ -795,7 +862,7 @@ class SlackClient:
         title: str | None = None,
         alt_text: str | None = None,
         processed: bool | float = True,
-        poll_interval: float = 1.0,
+        poll_interval: float = 0.5,
     ) -> str:
         """Upload a file (``files.getUploadURLExternal``, the bytes,
         ``files.completeUploadExternal``) and return its id. A ``str`` is sent
@@ -807,12 +874,18 @@ class SlackClient:
         ``image`` block (``slack_file: {id}``).
 
         ``processed`` (on by default; needs ``files:read``) waits until Slack
-        has processed the file (``files.info`` reports a ``mimetype``). Until
-        then an image block on it fails with ``invalid_blocks``, and an
-        attached one renders on phones as a generic file icon rather than
-        inline. ``True`` waits up to 30 s; a number is the timeout in seconds;
-        ``False`` skips the wait. Raises ``SlackApiError`` (code ``timeout``)
-        when time runs out.
+        has processed the file (`is_processed`: a ``mimetype``, and thumbnails
+        for an image). Until then an image block on it fails with
+        ``invalid_blocks``, and an attached one renders on phones as a generic
+        file icon rather than inline. It took ~0.5 s for a 12 KB PNG and
+        ~4.6 s for 3 MB (disky, 2026-11). ``True`` polls every
+        ``poll_interval`` (0.5 s) for up to 30 s; a number is the timeout in
+        seconds; ``False`` skips the wait. Past it, `FileNotProcessedError`,
+        deleting the file if it's unshared.
+
+        The bytes POST is retried (3 times, exponential from 1 s, or
+        ``Retry-After``) on a 429, a 5xx, a timeout or a dropped connection:
+        safe, since nothing exists until ``completeUploadExternal``.
         """
         body = data.encode() if isinstance(data, str) else data
         request = {"filename": name, "length": str(len(body))}
@@ -820,12 +893,7 @@ class SlackClient:
             request["alt_txt"] = alt_text
         up = self._request("files.getUploadURLExternal", request, method="GET")
         file_id = up["file_id"]
-        req = urllib.request.Request(up["upload_url"], data=body, method="POST")
-        try:
-            with urllib.request.urlopen(req) as resp:
-                resp.read()
-        except HTTPError as e:
-            raise SlackApiError("upload_url", f"http_{e.code}") from e
+        self._send_upload(up["upload_url"], body)
         entry = {"id": file_id}
         if title is not None:
             entry["title"] = title
@@ -839,12 +907,106 @@ class SlackClient:
         self._request("files.completeUploadExternal", done)
         if processed:
             timeout = 30.0 if processed is True else float(processed)
-            deadline = time.monotonic() + timeout
-            while not self.file_info(file_id).get("mimetype"):
-                if time.monotonic() + poll_interval > deadline:
-                    raise SlackApiError("files.info", "timeout", f"Slack file {file_id} not processed after {timeout:g}s")
+            start = time.monotonic()
+            # Bounded by polls as well as time, so a patched-out clock can't spin.
+            max_polls = int(timeout / poll_interval) + 1
+            poll = 1
+            while not is_processed(self.file_info(file_id)):
+                waited = time.monotonic() - start
+                if poll >= max_polls or waited + poll_interval > timeout:
+                    deleted = False
+                    if channel is None:
+                        try:
+                            self.delete_file(file_id)
+                            deleted = True
+                        except Exception:
+                            pass  # Reported via `deleted=False`.
+                    raise FileNotProcessedError(file_id, round(waited, 3), deleted)
                 time.sleep(poll_interval)
+                poll += 1
         return file_id
+
+    def _send_upload(self, url: str, body: bytes, retries: int = 3) -> None:
+        """POST an upload's bytes to its ``upload_url``, retrying a 429, a
+        5xx, a timeout or a dropped connection."""
+        for attempt in range(retries + 1):
+            req = urllib.request.Request(url, data=body, method="POST")
+            wait = 2.0 ** attempt
+            try:
+                with urllib.request.urlopen(req) as resp:
+                    resp.read()
+                return
+            except HTTPError as e:
+                failure = SlackApiError("upload_url", f"http_{e.code}")
+                if e.code == 429:
+                    after = e.headers.get("Retry-After") if e.headers else None
+                    if after is not None and after.isdigit():
+                        wait = float(after)
+                elif e.code < 500:
+                    raise failure from e
+                cause: Exception = e
+            except (URLError, TimeoutError, ConnectionError) as e:
+                timed_out = isinstance(e, TimeoutError) or isinstance(getattr(e, "reason", None), TimeoutError)
+                failure = SlackApiError("upload_url", "timeout" if timed_out else "transport_error")
+                cause = e
+            if attempt >= retries:
+                raise failure from cause
+            time.sleep(wait)
+
+    def replace_file(
+        self,
+        ts: str,
+        name: str,
+        data: bytes | str,
+        content: str,
+        *,
+        raw: bool | None = None,
+        metadata: dict | None = None,
+        previous: Sequence[str] | None = None,
+        alt_text: str | None = None,
+        title: str | None = None,
+    ) -> FileSwap:
+        """Swap the file attached to message ``ts`` (the hourly-card pattern):
+        upload ``data`` (waiting until Slack has processed it), edit the
+        message to ``content`` with only the new file attached, then delete
+        the files it had: ``previous``, or those read from the message (a
+        history scope).
+
+        No orphans: a replaced file is deleted only after the edit succeeded
+        (already gone is fine; other failures land in ``undeleted``). An edit
+        Slack definitely refused deletes the new upload; one that may have
+        landed (timeout, 5xx) keeps it. Either way it raises `FileSwapError`
+        with the upload's id.
+        """
+        if previous is None:
+            result = self._request("conversations.replies", {
+                "channel": self.channel, "ts": ts, "limit": 1,
+            }, method="GET")
+            msgs = result.get("messages") or []
+            files = msgs[0].get("files", []) if msgs and msgs[0].get("ts") == ts else []
+            previous = [f["id"] for f in files if isinstance(f.get("id"), str)]
+        file_id = self.upload(name, data, alt_text=alt_text, title=title)
+        try:
+            self.edit(ts, content, raw=raw, metadata=metadata, files=[file_id])
+        except Exception as e:
+            deleted = False
+            if _definitely_not_attached(e):
+                try:
+                    self.delete_file(file_id)
+                    deleted = True
+                except Exception:
+                    pass  # Reported via `deleted=False`.
+            raise FileSwapError(file_id, deleted) from e
+        swap = FileSwap(file_id=file_id)
+        for old in previous:
+            if old == file_id:
+                continue
+            try:
+                self.delete_file(old)
+                swap.deleted.append(old)
+            except Exception as e:
+                swap.undeleted.append((old, e))
+        return swap
 
     def file_info(self, file_id: str) -> dict:
         """A file's ``files.info`` record (``mimetype``, ``name``, ``shares``, …)."""

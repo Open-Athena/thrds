@@ -8,19 +8,39 @@ from __future__ import annotations
 
 import pytest
 
-from thrds.slack import FilesNotAttachedError, SlackApiError, SlackClient
+from urllib.error import HTTPError, URLError
+
+from thrds.slack import (
+    FileNotProcessedError,
+    FileSwap,
+    FileSwapError,
+    FilesNotAttachedError,
+    SlackApiError,
+    SlackClient,
+    is_processed,
+)
 
 
 class _Files(SlackClient):
     """Answers the file endpoints; ``unprocessed`` = how many ``files.info``
-    reads report no ``mimetype`` yet."""
-    def __init__(self, unprocessed: int = 0, delete_error: str | None = None, fail_update: bool = False):
+    reads report no ``mimetype`` yet. ``update_error`` fails ``chat.update``;
+    ``live_files`` are the files ``conversations.replies`` shows on ``1.0``."""
+    def __init__(
+        self,
+        unprocessed: int = 0,
+        delete_error: str | None = None,
+        fail_update: bool = False,
+        update_error: Exception | None = None,
+        live_files: list[str] = [],
+    ):
         super().__init__(token="xoxb-t", channel="C1")
         self._bot_ids = ("U1", "B1")
         self.calls: list[tuple[str, dict | None, str]] = []
         self.unprocessed = unprocessed
         self.delete_error = delete_error
         self.fail_update = fail_update
+        self.update_error = update_error
+        self.live_files = live_files
 
     def _request(self, endpoint, data=None, method="POST"):
         self.calls.append((endpoint, data, method))
@@ -30,11 +50,15 @@ class _Files(SlackClient):
             if self.unprocessed > 0:
                 self.unprocessed -= 1
                 return {"ok": True, "file": {"id": data["file"], "mimetype": ""}}
-            return {"ok": True, "file": {"id": data["file"], "mimetype": "image/png"}}
+            return {"ok": True, "file": {"id": data["file"], "mimetype": "image/png", "thumb_64": "https://t/64"}}
         if endpoint == "files.delete" and self.delete_error:
             raise SlackApiError(endpoint, self.delete_error)
         if endpoint == "chat.update" and self.fail_update:
             raise SlackApiError(endpoint, "http_503")
+        if endpoint == "chat.update" and self.update_error is not None:
+            raise self.update_error
+        if endpoint == "conversations.replies":
+            return {"ok": True, "messages": [{"ts": "1.0", "files": [{"id": f} for f in self.live_files]}]}
         if endpoint == "chat.postMessage":
             return {"ok": True, "ts": "5.0"}
         return {"ok": True, "ts": (data or {}).get("ts")}
@@ -101,17 +125,70 @@ def test_upload_processed_polls_until_mimetype(uploads, clock):
     assert [e for e, _, _ in c.calls] == [
         "files.getUploadURLExternal", "files.completeUploadExternal", "files.info", "files.info", "files.info",
     ]
-    assert clock == [1.0, 1.0]
+    assert clock == [0.5, 0.5]
 
 
-def test_upload_processed_times_out(uploads, clock):
+def test_upload_processed_times_out_and_deletes_the_unshared_file(uploads, clock):
     c = _Files(unprocessed=99)
-    with pytest.raises(SlackApiError) as e:
+    with pytest.raises(FileNotProcessedError) as e:
         c.upload("a.png", b"A", processed=2.5)
-    assert (e.value.endpoint, e.value.code, str(e.value)) == (
-        "files.info", "timeout", "Slack file F1 not processed after 2.5s",
+    assert (e.value.file_id, e.value.waited, e.value.deleted, str(e.value)) == (
+        "F1", 2.5, True, "Slack hadn't processed file F1 after 2.5 s (deleted it)",
     )
-    assert clock == [1.0, 1.0]
+    assert clock == [0.5, 0.5, 0.5, 0.5, 0.5]
+    assert c.calls[-1] == ("files.delete", {"file": "F1"}, "POST")
+
+
+def test_upload_poll_count_bounds_a_frozen_clock(uploads, monkeypatch):
+    monkeypatch.setattr("thrds.slack.time.sleep", lambda s: None)
+    c = _Files(unprocessed=99)
+    with pytest.raises(FileNotProcessedError):
+        c.upload("a.png", b"A", processed=2.0)
+    assert [e for e, _, _ in c.calls].count("files.info") == 5
+
+
+def test_is_processed_needs_thumbnails_for_images():
+    assert [
+        is_processed({"mimetype": ""}),
+        is_processed({"mimetype": "image/png"}),
+        is_processed({"mimetype": "image/png", "thumb_64": "u"}),
+        is_processed({"mimetype": "image/png", "thumb_tiny": "x"}),
+        is_processed({"mimetype": "text/plain"}),
+    ] == [False, False, True, False, True]
+
+
+def test_upload_post_retries_5xx_429_and_timeouts_but_not_4xx(monkeypatch, clock):
+    outcomes = [
+        HTTPError("u", 504, "Gateway Timeout", None, None),
+        HTTPError("u", 429, "Too Many", {"Retry-After": "3"}, None),
+        URLError(TimeoutError("timed out")),
+        None,
+    ]
+
+    def _urlopen(req, *a, **k):
+        o = outcomes.pop(0)
+        if o is not None:
+            raise o
+
+        class _R:
+            def __enter__(self): return self
+            def __exit__(self, *a): return False
+            def read(self): return b"OK"
+        return _R()
+
+    monkeypatch.setattr("thrds.slack.urllib.request.urlopen", _urlopen)
+    assert _Files().upload("a.png", b"A", processed=False) == "F1"
+    assert clock == [1.0, 3.0, 4.0]
+    outcomes[:] = [HTTPError("u", 413, "Too Large", None, None)]
+    with pytest.raises(SlackApiError) as e:
+        _Files().upload("a.png", b"A", processed=False)
+    assert (e.value.code, e.value.definite) == ("http_413", True)
+
+
+def test_definite():
+    assert [SlackApiError("x", c).definite for c in ("msg_too_long", "http_400", "http_503", "timeout", "transport_error")] == [
+        True, True, False, False, False,
+    ]
 
 
 def test_edit_files_only_when_given_and_empty_detaches():
@@ -156,3 +233,38 @@ def test_post_with_files_whose_attach_fails_names_the_posted_ts():
     assert (e.value.ts, str(e.value), e.value.__cause__.code) == (
         "5.0", "posted 5.0, but attaching its files failed", "http_503",
     )
+
+
+def test_replace_file_swaps_and_deletes_the_previous_only_after_the_edit(uploads):
+    c = _Files(live_files=["F0"])
+    assert c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True) == FileSwap(file_id="F1", deleted=["F0"])
+    assert [(e, d) for e, d, _ in c.calls] == [
+        ("conversations.replies", {"channel": "C1", "ts": "1.0", "limit": 1}),
+        ("files.getUploadURLExternal", {"filename": "fleet.png", "length": "3"}),
+        ("files.completeUploadExternal", {"files": [{"id": "F1"}]}),
+        ("files.info", {"file": "F1"}),
+        ("chat.update", {
+            "channel": "C1", "ts": "1.0", "text": "card",
+            "unfurl_links": False, "unfurl_media": False, "file_ids": ["F1"],
+        }),
+        ("files.delete", {"file": "F0"}),
+    ]
+
+
+@pytest.mark.parametrize("error, deleted, message", [
+    (SlackApiError("chat.update", "msg_too_long"), True, "attaching file F1 failed (deleted the upload)"),
+    (SlackApiError("chat.update", "http_503"), False, "attaching file F1 failed (kept the upload: the write may have landed)"),
+])
+def test_replace_file_failed_edit(uploads, error, deleted, message):
+    c = _Files(update_error=error)
+    with pytest.raises(FileSwapError) as e:
+        c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=["F0"])
+    assert (e.value.file_id, e.value.deleted, str(e.value), e.value.__cause__) == ("F1", deleted, message, error)
+    # The previous file is never touched; the new one is deleted only when Slack refused the edit.
+    assert [d for ep, d, _ in c.calls if ep == "files.delete"] == ([{"file": "F1"}] if deleted else [])
+
+
+def test_replace_file_reports_undeletable_previous_files(uploads):
+    c = _Files(delete_error="cant_delete_file")
+    swap = c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=["F0"])
+    assert (swap.file_id, swap.deleted, [(i, e.code) for i, e in swap.undeleted]) == ("F1", [], [("F0", "cant_delete_file")])

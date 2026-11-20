@@ -92,7 +92,29 @@ thrds slack edit    #foo 1783.1 'new'    # edit; raw by default
 thrds slack permalink #foo 1783.1        # get workspace permalink URL
 ```
 
-**Image blocks.** A trailing standalone `![alt](url)` line becomes a Block Kit `image` block after the message body — and because an image *block*'s URL (unlike an attached file) can be edited, a job can converge the same OP with a new card URL and the image refreshes in place. If the bytes change under a stable URL, suffix `{bust}`: each post/edit appends a fresh `?thrds_bust=<minute>` param so Slack's URL-keyed cache refetches, while a no-op converge never touches it. See [`specs/done/editable-image-blocks.md`](specs/done/editable-image-blocks.md).
+**Image blocks.** A trailing standalone `![alt](url)` line becomes a Block Kit `image` block after the message body. Its URL can be edited, so a job can converge the same OP with a new card URL and the image refreshes in place. If the bytes change under a stable URL, suffix `{bust}`: each post/edit appends a fresh `?thrds_bust=<minute>` param so Slack's URL-keyed cache refetches, while a no-op converge never touches it. See [`specs/done/editable-image-blocks.md`](specs/done/editable-image-blocks.md).
+
+**Editable images: attached file vs. image block.** Both kinds edit in place (same `ts`, no new notification), but only an **attached file** offers Download / Save on Slack's phone apps:
+
+| | Attached file | Image block |
+|---|---|---|
+| Phone Download / Save | Yes | No |
+| Where it sits | Below all blocks | Where you put it |
+| Swap | `edit(ts, …, files=[new])`, then delete the old file | A new URL (`{bust}`), or another uploaded file |
+
+`SlackClient.replace_file(ts, name, data, content)` does the hourly-card swap in one call:
+1. It uploads, waiting until Slack has processed the file.
+2. It edits with only the new file attached.
+3. It deletes the previous file, but only after the edit succeeded.
+
+If the edit fails, the new upload is deleted when Slack definitely refused it, or kept when the write may have landed (`FileSwapError` carries its id).
+
+The pieces:
+- `upload(name, data, processed=True)`: polls `files.info` every 0.5 s for up to 30 s until there's a `mimetype` and, for an image, thumbnails. The bytes POST retries a 5xx, a 429 or a timeout.
+- `edit(..., files=)`: omitting it keeps the attached files, and `[]` detaches them.
+- `post(..., files=)`, `delete_file`, `file_info`.
+
+Processing took ~0.5 s for a 12 KB PNG and ~4.6 s for 3 MB. Attached before then, an image first renders as a generic file icon, and an image block on it fails with `invalid_blocks`. Measurements and Slack's behavior are in the TS branch's [`editable-images` spec][editable-images].
 
 #### Tokens + scopes
 
@@ -408,3 +430,4 @@ class Action:
 [Open-Athena/marin-discord]: https://github.com/Open-Athena/marin-discord
 [ts-branch]: https://github.com/Open-Athena/thrds/tree/ts
 [npm]: https://www.npmjs.com/package/@open-athena/thrds
+[editable-images]: https://github.com/Open-Athena/thrds/blob/ts/specs/done/editable-images.md

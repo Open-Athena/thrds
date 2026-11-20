@@ -40,7 +40,7 @@ class _FakeSlack(SlackClient):
         if endpoint == "files.completeUploadExternal":
             return {"ok": True}
         if endpoint == "files.info":
-            return {"ok": True, "file": {"id": data["file"], "mimetype": "image/png"}}
+            return {"ok": True, "file": {"id": data["file"], "mimetype": "image/png", "thumb_64": "https://t/64"}}
         if endpoint == "chat.postMessage":
             self._n += 1
             return {"ts": f"{self._n}.000", "channel": "C_TARGET"}
