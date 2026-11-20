@@ -47,7 +47,22 @@ Not covered: what Slack shows when a file that's still attached gets deleted (th
 
 ## Python parity
 
-Pending: `SlackClient.upload`, `edit(files=)`, `delete_file` on `py`.
+Landed on `py` in `ab8c97b`:
+- `upload(name, data, *, channel, initial_comment, thread_ts, title, alt_text, processed)` and `file_info`.
+- `edit(..., files=)` sends `file_ids` (`None` leaves the files alone, `[]` detaches).
+- `delete_file` tolerates `file_not_found` / `file_deleted`.
+- `SlackApiError(RuntimeError)` carries `.code`.
+- `_upload_file`, which backs the lazy `slack_file` image blocks, now waits for processing, which fixes the `invalid_blocks` race above.
+- `post(files=)` isn't there yet; it waits on the rendering question below.
+
+## Open: inline image vs. file icon
+
+On Ryan's Android, scenario 3's file rendered as a generic file icon with Download. That was a blocks post with the file attached by edit, before processing finished. Scenario 1's file rendered inline: that message was created by `files.completeUploadExternal` into the channel, then swapped by `file_ids`. disky posted three variants for Ryan to check:
+- (a) a blocks post, then a processed file;
+- (b) a text-only post, then a processed file;
+- (c) a message created by the upload (with blocks), then swapped.
+
+If only (c) renders inline, `post` with files should create the message through `completeUploadExternal`, which takes bytes rather than ids. Either way, attaching by edit should probably wait for processing. TS `post` with files (post, then attach by edit) stays as it is until the answer comes back.
 
 ## Leftovers in the test DM
 
