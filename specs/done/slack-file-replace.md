@@ -32,7 +32,7 @@ disky ran `tmp/slack_file_experiment.py 3` for the two behaviors the helpers rel
 
 ## What landed (TS, `ts`)
 
-- `upload(name, data, opts)` → file id (`src/slack.ts`). It's unshared unless `opts.channel` (`initialComment`, `threadTs`) is given. `opts.processed` polls `files.info` until `mimetype` is set (default every 1 s for up to 30 s) and throws a `timeout` `SlackApiError` past that. The upload POST uses the client's `fetch` and `timeoutMs`; errors name the method `upload_url`.
+- `upload(name, data, opts)` → file id (`src/slack.ts`). It's unshared unless `opts.channel` (`initialComment`, `threadTs`) is given. By default it polls `files.info` until `mimetype` is set (every 1 s, up to 30 s; `processed: false` skips this) and throws a `timeout` `SlackApiError` past that. The upload POST uses the client's `fetch` and `timeoutMs`; errors name the method `upload_url`.
 - `Msg.files: string[]` goes out as `chat.update` `file_ids`. Omitted leaves the files alone; `[]` detaches. Files count toward `msgHash` and make a message rich.
 - `post` with files: `chat.postMessage` takes no `file_ids`, so it posts stamped *without* the files, then `edit`s them on. If that edit fails it throws `FilesNotAttachedError` (`ts`, `cause`). It isn't a `SlackApiError`, so `syncSlots` keeps `pending`.
 - `syncSlots` adoption now records the hash stamped on the live message rather than the pending one. Without that, a post whose attach failed would be adopted as up to date and never get its files.
@@ -53,16 +53,13 @@ Landed on `py` in `ab8c97b`:
 - `delete_file` tolerates `file_not_found` / `file_deleted`.
 - `SlackApiError(RuntimeError)` carries `.code`.
 - `_upload_file`, which backs the lazy `slack_file` image blocks, now waits for processing, which fixes the `invalid_blocks` race above.
-- `post(files=)` isn't there yet; it waits on the rendering question below.
+- `post(files=)`: posts, then attaches by `edit` (`FilesNotAttachedError` if that fails).
 
-## Open: inline image vs. file icon
+## Inline image vs. file icon (resolved)
 
-On Ryan's Android, scenario 3's file rendered as a generic file icon with Download. That was a blocks post with the file attached by edit, before processing finished. Scenario 1's file rendered inline: that message was created by `files.completeUploadExternal` into the channel, then swapped by `file_ids`. disky posted three variants for Ryan to check:
-- (a) a blocks post, then a processed file;
-- (b) a text-only post, then a processed file;
-- (c) a message created by the upload (with blocks), then swapped.
+On Ryan's Android, scenario 3's file first rendered as a generic file icon with Download, while scenario 1's rendered inline. disky posted three variants to separate the causes: (a) a blocks post, then a processed file; (b) a text-only post, then a processed file; (c) a message created by the upload, then swapped. All of them, plus scenarios 1 and 3 on a later look, render large and inline with Download. Scenario 3's file had been attached before Slack finished processing it.
 
-If only (c) renders inline, `post` with files should create the message through `completeUploadExternal`, which takes bytes rather than ids. Either way, attaching by edit should probably wait for processing. TS `post` with files (post, then attach by edit) stays as it is until the answer comes back.
+So it doesn't matter how the message was created, and post-then-attach is fine. What matters is attaching only once the file is processed. `upload` now waits for processing by default (`processed: false` opts out), in TS and Python (`upload(processed=False)`).
 
 ## Leftovers in the test DM
 

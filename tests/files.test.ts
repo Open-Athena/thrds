@@ -8,7 +8,7 @@ import { fakeChannel, timeoutError } from "./helpers";
 const bytes = (s: string) => new TextEncoder().encode(s);
 
 describe("upload", () => {
-  it("unshared by default: get an upload URL, send the bytes, complete without a channel", async () => {
+  it("unshared by default: get an upload URL, send the bytes, complete without a channel, wait until processed", async () => {
     const { client, calls, files, messages } = fakeChannel();
     const id = await client.upload("fleet.png", bytes("PNG!"), { altText: "fleet" });
     expect([id, calls, [...files.values()], messages]).toEqual([
@@ -17,15 +17,16 @@ describe("upload", () => {
         { method: "files.getUploadURLExternal", http: "POST", body: { filename: "fleet.png", length: "4", alt_txt: "fleet" } },
         { method: "upload_url", http: "POST", body: { file: "F101" }, bytes: bytes("PNG!") },
         { method: "files.completeUploadExternal", http: "POST", body: { files: [{ id: "F101", title: "fleet.png" }] } },
+        { method: "files.info", http: "GET", body: { file: "F101" } },
       ],
-      [{ id: "F101", name: "fleet.png", title: "fleet.png", mimetype: "", bytes: bytes("PNG!") }],
+      [{ id: "F101", name: "fleet.png", title: "fleet.png", mimetype: "image/png", bytes: bytes("PNG!") }],
       [],
     ]);
   });
 
   it("shares into a channel (a file message) with a comment, in a thread; strings go as UTF-8", async () => {
     const { client, calls, messages } = fakeChannel({ messages: [{ ts: "1.000000", text: "parent" }] });
-    await client.upload("notes.txt", "héllo", { channel: "C1", initialComment: "notes", threadTs: "1.000000", title: "Notes" });
+    await client.upload("notes.txt", "héllo", { channel: "C1", initialComment: "notes", threadTs: "1.000000", title: "Notes", processed: false });
     expect([calls.map((c) => c.bytes?.byteLength ?? c.body), messages]).toEqual([
       [
         { filename: "notes.txt", length: "6" },
@@ -39,12 +40,12 @@ describe("upload", () => {
     ]);
   });
 
-  it("`processed` polls files.info until Slack reports a mimetype, and times out with a bound", async () => {
+  it("polls files.info until Slack reports a mimetype (by default), and times out with a bound", async () => {
     const { client, calls } = fakeChannel({ processedAfter: 2 });
     const { sleep, waits } = { waits: [] as number[], sleep: async (ms: number) => void waits.push(ms) };
     let t = 0;
     const timed = client.with({ sleep: async (ms) => void (t += ms, sleep(ms)), now: () => t });
-    const id = await timed.upload("a.png", bytes("A"), { processed: true });
+    const id = await timed.upload("a.png", bytes("A"));
     const slow = fakeChannel({ processedAfter: 99 });
     let t2 = 0;
     const e = await slow.client

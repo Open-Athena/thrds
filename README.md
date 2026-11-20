@@ -95,16 +95,17 @@ await slack.edit(ts, { text: "Fleet status", blocks, files: [file] });
 if (prev) await slack.deleteFile(prev);
 ```
 
-- `upload(name, bytes | string | Blob, opts)` → file id. Unshared unless `opts.channel` (with `initialComment`, `threadTs`), which posts a file message. `opts.processed` waits until Slack has processed the file (default: poll every 1 s, up to 30 s).
+- `upload(name, bytes | string | Blob, opts)` → file id. Unshared unless `opts.channel` (with `initialComment`, `threadTs`), which posts a file message. It waits until Slack has processed the file (`files.info` reports a `mimetype`; polls every 1 s, up to 30 s, `processed: false` to skip). Attached before then, a file first renders on phones as a generic file icon instead of inline.
 - `Msg.files`: file ids attached below the message, sent as `chat.update` `file_ids`. On an edit, they replace the message's files. Omitting `files` leaves them as they were, and `[]` detaches them; a detached file still exists until `deleteFile`. `chat.postMessage` takes no `file_ids`, so `post` with files posts first, then attaches them with an edit. If that edit fails it throws `FilesNotAttachedError` (with the `ts`), and the message stays stamped without the files, so `sync` / `upsert` attach them on their next run. Files count toward the content hash.
 - `deleteFile(id)` (`files.delete`): a file that's already gone is fine. `fileInfo(id)` (`files.info`).
-- Scopes: `files:write`; `files:read` for `fileInfo` / `processed`.
+- Scopes: `files:write`, and `files:read` for `fileInfo` and the processing wait.
 
 What Slack does (tested by disky in a DM, 2026-11; [spec][file-replace]):
 - Every edit kept the message in place: same `ts`, marked `(edited)`, no new notification.
 - **Only an attached file offers Download / Save on Slack's phone apps.** An `image` block doesn't, whether it points at a URL or at an uploaded file (`slack_file: {id}` or `{url}`).
 - Swapping `file_ids` replaces the attached file. That works on a file message and on a plain blocks message, where the file shows below the blocks. Deleting the replaced file afterwards leaves the new one showing.
-- An `image` block on an uploaded file fails with `invalid_blocks` until Slack has processed the upload (`files.info` `mimetype` is `""` until then). Upload with `processed: true` first.
+- Until Slack has processed an upload (`files.info` `mimetype` is `""` until then), an `image` block on it fails with `invalid_blocks`, and attaching it renders a generic file icon at first; once processed it shows large and inline, with Download. `upload` waits for processing by default.
+- A message created by the upload itself and a plain post with the file attached by edit render the same.
 
 ### Declarative sync
 

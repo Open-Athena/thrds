@@ -143,9 +143,10 @@ export interface UploadOptions {
   title?: string;
   altText?: string;
   /**
-   * Return only once Slack has processed the file (`files.info` reports its `mimetype`). An `image` block that points
-   * at the file (`slack_file: {id}`) fails with `invalid_blocks` until then; attaching it with `files` doesn't need
-   * this. `true` polls every second for up to 30 s. Throws a `timeout` `SlackApiError` when time runs out.
+   * Return only once Slack has processed the file (`files.info` reports its `mimetype`; needs `files:read`). On by
+   * default: an `image` block on an unprocessed file (`slack_file: {id}`) fails with `invalid_blocks`, and one attached
+   * with `files` first renders on phones as a generic file icon rather than inline. `true` polls every second for up
+   * to 30 s; `false` skips the wait. Throws a `timeout` `SlackApiError` when time runs out.
    */
   processed?: boolean | { timeoutMs?: number; intervalMs?: number };
 }
@@ -623,8 +624,9 @@ export class SlackClient implements ThreadClient {
       if (options.threadTs !== undefined) done["thread_ts"] = options.threadTs;
     }
     await this.api("files.completeUploadExternal", done);
-    if (options.processed) {
-      const { timeoutMs: limit = 30_000, intervalMs = 1000 } = options.processed === true ? {} : options.processed;
+    const processed = options.processed ?? true;
+    if (processed) {
+      const { timeoutMs: limit = 30_000, intervalMs = 1000 } = processed === true ? {} : processed;
       const start = this.now();
       for (;;) {
         const file = await this.fileInfo(id);
