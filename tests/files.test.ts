@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { THRDS_HASH, contentKey, msgHash } from "../src/core";
 import { hash53Bytes } from "../src/hash";
-import { FileNotProcessedError, FileSwapError, FilesNotAttachedError, isProcessed } from "../src/slack";
-import { FILE_HASH, memoryStore, tagSlot, upsert, upsertFile } from "../src/slots";
+import { FILE_HASHES, FileNotProcessedError, FileSwapError, FilesNotAttachedError, isProcessed, withFiles } from "../src/slack";
+import { memoryStore, tagSlot, upsert, upsertFile, upsertFiles } from "../src/slots";
 import { image, section, versionedUrl } from "../src/mrkdwn";
 import { fakeChannel, timeoutError } from "./helpers";
 
@@ -217,17 +217,37 @@ describe("deleteFile", () => {
   });
 });
 
-describe("replaceFile", () => {
+describe("replaceFile(s)", () => {
   it("uploads, edits with only the new file attached, then deletes the files the message had", async () => {
     const { client, messages, files, writes } = fakeChannel({ messages: [{ ts: "1.000000", text: "card", bot_id: "B_BOT" }] });
     const old = await client.upload("old.png", bytes("old"));
     await client.edit("1.000000", { text: "card", files: [old] });
     const swap = await client.replaceFile("1.000000", { name: "new.png", data: bytes("new") }, "card v2");
-    expect([swap, messages[0]!.files, [...files.keys()], writes.slice(1)]).toEqual([
-      { fileId: "F102", deleted: [old], undeleted: [] },
+    expect([swap, messages[0]!.files, messages[0]!.metadata, [...files.keys()], writes.slice(1)]).toEqual([
+      { fileIds: ["F102"], uploaded: ["F102"], deleted: [old], undeleted: [], fileId: "F102" },
       [{ id: "F102", name: "new.png" }],
+      { event_type: "thrds", event_payload: { [FILE_HASHES]: [hash53Bytes(bytes("new"))], thrds_hash: msgHash(withFiles("card v2", ["F102"], [hash53Bytes(bytes("new"))])) } },
       ["F102"],
       [["edit", "card v2"], ["delete_file", old]],
+    ]);
+  });
+
+  it("reads the message's files and their hashes back: unchanged bytes are reused, reordered without uploads", async () => {
+    const { client, calls, messages, files } = fakeChannel({ messages: [{ ts: "1.000000", text: "card", bot_id: "B_BOT" }] });
+    const panel = (s: string) => ({ name: `${s}.png`, data: bytes(s) });
+    await client.replaceFiles("1.000000", [panel("a"), panel("b"), panel("c")], "card");
+    const n = calls.length;
+    const swap = await client.replaceFiles("1.000000", [panel("c"), panel("a"), panel("b2")], "card");
+    expect([
+      swap,
+      calls.slice(n).map((c) => c.method),
+      messages[0]!.files!.map((f) => f.name),
+      [...files.keys()],
+    ]).toEqual([
+      { fileIds: ["F103", "F101", "F104"], uploaded: ["F104"], deleted: ["F102"], undeleted: [] },
+      ["conversations.replies", "files.getUploadURLExternal", "upload_url", "files.completeUploadExternal", "files.info", "chat.update", "files.delete"],
+      ["c.png", "a.png", "b2.png"],
+      ["F101", "F103", "F104"],
     ]);
   });
 
@@ -240,7 +260,7 @@ describe("replaceFile", () => {
       const old = await client.upload("old.png", bytes("old"));
       await client.edit("1.000000", { text: "card", files: [old] });
       const e = await client.replaceFile("1.000000", { name: "new.png", data: bytes("new") }, "card v2").catch((x) => x);
-      return [e instanceof FileSwapError, e.message, e.fileId, e.deleted, e.cause.code, [...files.keys()]];
+      return [e instanceof FileSwapError, e.message, e.fileIds, e.fileId, e.deleted, e.cause.code, [...files.keys()]];
     };
     expect([
       await run(() => ({ body: { ok: false, error: "msg_too_long" } })),
@@ -248,8 +268,8 @@ describe("replaceFile", () => {
         throw timeoutError();
       }),
     ]).toEqual([
-      [true, "attaching file F102 failed (deleted the upload)", "F102", true, "msg_too_long", ["F101"]],
-      [true, "attaching file F102 failed (kept the upload: the write may have landed)", "F102", false, "timeout", ["F101", "F102"]],
+      [true, "attaching file F102 failed (deleted the upload)", ["F102"], "F102", true, "msg_too_long", ["F101"]],
+      [true, "attaching file F102 failed (kept the upload: the write may have landed)", ["F102"], "F102", false, "timeout", ["F101", "F102"]],
     ]);
   });
 
@@ -258,7 +278,7 @@ describe("replaceFile", () => {
       messages: [{ ts: "1.000000", text: "card", bot_id: "B_BOT" }],
       intercept: ({ method, body }) => (method === "files.delete" && body["file"] === "F9" ? { body: { ok: false, error: "cant_delete_file" } } : undefined),
     });
-    const swap = await client.replaceFile("1.000000", { name: "a.png", data: bytes("A") }, "card", { previous: ["F8", "F9"] });
+    const swap = await client.replaceFile("1.000000", { name: "a.png", data: bytes("A") }, "card", { previous: [{ id: "F8" }, { id: "F9" }] });
     expect([swap.fileId, swap.deleted, swap.undeleted.map((u) => [u.id, (u.error as { code: string }).code])]).toEqual([
       "F101",
       ["F8"],
@@ -267,11 +287,14 @@ describe("replaceFile", () => {
   });
 });
 
-describe("upsertFile", () => {
-  it("posts with the file, skips unchanged bytes without uploading, swaps changed bytes and deletes the old file", async () => {
+describe("upsertFile(s)", () => {
+  const card = (n: number) => ({ text: "Fleet", blocks: [section(`*Fleet* run ${n}`)] });
+  const panel = (s: string) => ({ name: `${s}.png`, data: bytes(s) });
+  const uploads = (calls: Array<{ method: string }>, from = 0) => calls.slice(from).filter((c) => c.method === "files.getUploadURLExternal").length;
+
+  it("one file: posts with it, skips unchanged bytes without uploading, swaps changed bytes and deletes the old file", async () => {
     const { client, calls, messages, files } = fakeChannel();
     const store = memoryStore();
-    const card = (n: number) => ({ text: "Fleet", blocks: [section(`*Fleet* run ${n}`)] });
     const methods = (from: number) => calls.slice(from).map((c) => c.method);
     const r1 = await upsertFile(client, store, "fleet", card(1), { name: "fleet.png", data: bytes("png-1") });
     let n = calls.length;
@@ -282,36 +305,149 @@ describe("upsertFile", () => {
     const swapped = methods(n);
     expect([
       [r1.action, r1.fileId, r1.deleted],
-      [r2.action, r2.fileId, skipped],
+      [r2.action, r2.fileId, r2.uploaded, skipped],
       [r3.action, r3.fileId, r3.deleted, swapped],
       messages.map((m) => [m.ts, m.files]),
       [...files.keys()],
-      (await store.get("fleet"))!.parent!.files,
-      (messages[0]!.metadata!.event_payload as Record<string, unknown>)[FILE_HASH],
+      (await store.get("fleet"))!.parent,
     ]).toEqual([
       ["POST", "F101", []],
-      ["SKIP", "F101", []],
+      ["SKIP", "F101", [], []],
       ["EDIT", "F102", ["F101"], ["files.getUploadURLExternal", "upload_url", "files.completeUploadExternal", "files.info", "chat.update", "files.delete"]],
       [["101.000000", [{ id: "F102", name: "fleet.png" }]]],
       ["F102"],
-      ["F102"],
-      hash53Bytes(bytes("png-2")),
+      {
+        ts: "101.000000",
+        hash: msgHash(tagSlot(withFiles(card(1), ["F102"], [hash53Bytes(bytes("png-2"))]), "fleet", null)),
+        files: ["F102"],
+        fileHashes: [hash53Bytes(bytes("png-2"))],
+      },
     ]);
   });
 
-  it("a changed message with the same bytes still re-uploads and swaps (only an unchanged pair skips)", async () => {
-    const { client, files } = fakeChannel();
+  it("a changed message with the same bytes edits, reusing the attached file", async () => {
+    const { client, calls, files } = fakeChannel();
     const store = memoryStore();
     await upsertFile(client, store, "fleet", "Fleet 1", { name: "f.png", data: bytes("same") });
+    const n = calls.length;
     const r = await upsertFile(client, store, "fleet", "Fleet 2", { name: "f.png", data: bytes("same") });
-    expect([r.action, r.fileId, r.deleted, [...files.keys()]]).toEqual(["EDIT", "F102", ["F101"], ["F102"]]);
+    expect([r.action, r.fileId, r.uploaded, r.deleted, uploads(calls, n), [...files.keys()]]).toEqual(["EDIT", "F101", [], [], 0, ["F101"]]);
+  });
+
+  it("several files: only changed ones upload, order follows the list, removed ones are deleted", async () => {
+    const { client, calls, messages, files } = fakeChannel();
+    const store = memoryStore();
+    const names = () => messages[0]!.files!.map((f) => f.name);
+    const r1 = await upsertFiles(client, store, "fleet", card(1), [panel("a"), panel("b"), panel("c"), panel("d")]);
+    let n = calls.length;
+    const same = await upsertFiles(client, store, "fleet", card(1), [panel("a"), panel("b"), panel("c"), panel("d")]);
+    const sameUploads = uploads(calls, n);
+    n = calls.length;
+    const one = await upsertFiles(client, store, "fleet", card(1), [panel("a"), panel("b2"), panel("c"), panel("d")]);
+    const oneUploads = uploads(calls, n);
+    const afterOne = names();
+    n = calls.length;
+    const reordered = await upsertFiles(client, store, "fleet", card(1), [panel("d"), panel("c"), panel("b2"), panel("a")]);
+    const reorderUploads = uploads(calls, n);
+    const afterReorder = names();
+    const removed = await upsertFiles(client, store, "fleet", card(1), [panel("d"), panel("a")]);
+    expect([
+      [r1.action, r1.fileIds, r1.uploaded],
+      [same.action, same.uploaded, sameUploads],
+      [one.action, one.fileIds, one.uploaded, one.deleted, oneUploads, afterOne],
+      [reordered.action, reordered.fileIds, reordered.uploaded, reordered.deleted, reorderUploads, afterReorder],
+      [removed.action, removed.fileIds, removed.deleted, names()],
+      [...files.keys()],
+    ]).toEqual([
+      ["POST", ["F101", "F102", "F103", "F104"], ["F101", "F102", "F103", "F104"]],
+      ["SKIP", [], 0],
+      ["EDIT", ["F101", "F105", "F103", "F104"], ["F105"], ["F102"], 1, ["a.png", "b2.png", "c.png", "d.png"]],
+      ["EDIT", ["F104", "F103", "F105", "F101"], [], [], 0, ["d.png", "c.png", "b2.png", "a.png"]],
+      ["EDIT", ["F104", "F101"], ["F103", "F105"], ["d.png", "a.png"]],
+      ["F101", "F104"],
+    ]);
+  });
+
+  it("an upload failing partway deletes this run's uploads and writes nothing", async () => {
+    const { client, files, writes } = fakeChannel({
+      intercept: ({ method, body }) => (method === "files.getUploadURLExternal" && body["filename"] === "c.png" ? { body: { ok: false, error: "invalid_name" } } : undefined),
+    });
+    const e = await upsertFiles(client, memoryStore(), "fleet", card(1), [panel("a"), panel("b"), panel("c")]).catch((x) => x);
+    expect([e.code, [...files.keys()], writes]).toEqual(["invalid_name", [], [["delete_file", "F101"], ["delete_file", "F102"]]]);
+  });
+
+  it("a refused write deletes only this run's uploads, never the reused files", async () => {
+    let refuse = false;
+    const { client, files } = fakeChannel({
+      intercept: ({ method }) => (method === "chat.update" && refuse ? { body: { ok: false, error: "msg_too_long" } } : undefined),
+    });
+    const store = memoryStore();
+    await upsertFiles(client, store, "fleet", card(1), [panel("a"), panel("b")]);
+    refuse = true;
+    const e = await upsertFiles(client, store, "fleet", card(1), [panel("a"), panel("b2")]).catch((x) => x);
+    expect([e instanceof FileSwapError, e.fileIds, e.deleted, [...files.keys()], (await store.get("fleet"))!.parent!.files]).toEqual([
+      true,
+      ["F103"],
+      true,
+      ["F101", "F102"],
+      ["F101", "F102"],
+    ]);
+  });
+
+  it("a write that fails without new uploads rethrows the error as-is", async () => {
+    let refuse = false;
+    const { client } = fakeChannel({
+      intercept: ({ method }) => (method === "chat.update" && refuse ? { body: { ok: false, error: "msg_too_long" } } : undefined),
+    });
+    const store = memoryStore();
+    await upsertFiles(client, store, "fleet", "Fleet 1", [panel("a")]);
+    refuse = true;
+    const e = await upsertFiles(client, store, "fleet", "Fleet 2", [panel("a")]).catch((x) => x);
+    expect([e.name, e.code]).toEqual(["SlackApiError", "msg_too_long"]);
+  });
+
+  it("a record without fileHashes (e.g. from an older upsertFile) re-uploads once, then dedupes", async () => {
+    const { client, calls } = fakeChannel();
+    const store = memoryStore();
+    await upsertFiles(client, store, "fleet", "Fleet", [panel("a")]);
+    const state = (await store.get("fleet"))!;
+    delete state.parent!.fileHashes;
+    await store.put("fleet", state);
+    let n = calls.length;
+    const first = await upsertFiles(client, store, "fleet", "Fleet", [panel("a")]);
+    const firstUploads = uploads(calls, n);
+    n = calls.length;
+    const second = await upsertFiles(client, store, "fleet", "Fleet", [panel("a")]);
+    expect([[first.action, first.deleted, firstUploads], [second.action, uploads(calls, n)]]).toEqual([
+      ["EDIT", ["F101"], 1],
+      ["SKIP", 0],
+    ]);
+  });
+
+  it("uploads `concurrency` at a time", async () => {
+    let inFlight = 0;
+    let peak = 0;
+    const { client } = fakeChannel();
+    const slow = client.with({});
+    const upload = slow.upload.bind(slow);
+    slow.upload = async (...args: Parameters<typeof upload>) => {
+      peak = Math.max(peak, ++inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      try {
+        return await upload(...args);
+      } finally {
+        inFlight--;
+      }
+    };
+    const r = await upsertFiles(slow, memoryStore(), "fleet", "Fleet", [panel("a"), panel("b"), panel("c"), panel("d")], { concurrency: 2 });
+    expect([r.fileIds.length, peak]).toEqual([4, 2]);
   });
 
   it("with create: false and no record, posts nothing and uploads nothing", async () => {
     const { client, calls } = fakeChannel();
     const r = await upsertFile(client, memoryStore(), "fleet", "Fleet", { name: "f.png", data: bytes("x") }, { create: false });
     expect([r, calls.map((c) => c.method)]).toEqual([
-      { status: "missing", ts: "", action: null, fileId: null, deleted: [], undeleted: [] },
+      { status: "missing", ts: "", action: null, fileIds: [], uploaded: [], deleted: [], undeleted: [], fileId: null },
       [],
     ]);
   });

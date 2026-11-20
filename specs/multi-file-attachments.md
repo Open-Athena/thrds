@@ -1,6 +1,6 @@
 # Several live attached images per message: `upsertFiles` (plan; from disky)
 
-**Status: planned, not built.** It waits on Ryan's call on the layout: experiment 6, with 2 and 4 wide images on one message, in `D0CFNTSEJTY` (p1795139938050409, p1795139943305019). disky will say when.
+**Status: TS landed; Python next.** Ryan said "resume/continue" (2026-11-20) and sent phone screenshots of experiments 6–7 (see "Layout" below).
 
 ## Why
 
@@ -39,14 +39,33 @@ Python (no slots store): `replace_files(ts, files: Sequence[tuple[str, bytes | s
    - Otherwise keep them.
    - Either way, throw `FileSwapError`, widened to carry `fileIds: string[]` (this run's uploads) and `deleted`.
 
-## Limits and open questions
+## Findings
 
-- **Maximum files per message:** untested. Slack's UI allows 10. Until disky checks what `chat.update` does past that, refuse more than 10 with a clear error, not a Slack one.
-- **Layout:** files render in list order. How Slack lays out 2, 3 and 4 wide images (a grid or a stack, and whether there's "show more" past some count) is what experiment 6 is for. Record Ryan's verdict here.
-- **Per-file titles:** `title` / `altText` per entry come through `UploadOptions`. Whether the phone app shows titles under multiple images is unknown.
-- **Partial readiness:** a 4-panel card at ~0.5–1 s of processing per small PNG takes a few seconds sequentially. `concurrency` exists for that; default to 1 and measure before raising it.
+- **Experiment 7, how many files:** `chat.update` with 11 `file_ids` returned ok with no warning and read back all 11 in order. The API doesn't stop at the UI's 10, so there's no guard; a higher limit is untested.
+- **Layout (Ryan's iPhone, experiments 6–7):**
+  - Several attached files show under an "N attachments" line as one horizontal row you swipe through, in list order.
+  - Wide images are about 60% of the screen wide (one plus the edge of the next); 11 square tiles show about 2.5 at a time.
+  - It isn't a grid, and there's no "show more". A 4-panel card reads as a swipeable strip, not a 2×2 mosaic.
+- **Per-file titles:** `title` / `altText` come through `UploadOptions` per entry. Whether the phone shows them is unknown (the screenshots show none).
+- **`concurrency`:** default 1, measured nothing yet.
 
-## Tests (planned, `fakeChannel`)
+## What landed (TS)
+
+- **`swapFiles(client, previous: AttachedFile[], desired: { hash, upload }[], write, { concurrency })`** implements the algorithm above.
+  - It returns `{ fileIds, uploaded, deleted, undeleted, result }`.
+  - A write that fails with nothing newly uploaded rethrows as-is.
+  - `swapFile` is gone (forget BC: it was unpublished and unadopted).
+- **`FileSwapError`** carries `fileIds`, with `fileId` as a getter for the first one.
+- **Helpers:**
+  - `FILE_HASHES` = `thrds_files` replaces the single-file `FILE_HASH`.
+  - `attachedFiles(message)` returns ids plus hashes when the metadata lines up.
+  - `withFiles(msg, ids, hashes)`.
+- **`slack.replaceFiles(ts, files, msg, { previous?, concurrency? })`** is the stateless form. `replaceFile` is its one-file wrapper, and now dedupes as well.
+- **`upsertFiles(client, store, key, msg, files, options & { concurrency })`** is the stored-state form. `upsertFile` is its one-file wrapper.
+- **`SlotRecord.fileHashes`** is recorded from the sent message's `thrds_files` when its length matches `files`. An edit without `files` keeps both.
+- **Tests:** `tests/files.test.ts`, with a `replaceFile(s)` block and an `upsertFile(s)` block, covering every planned case except the >10 refusal, which was dropped.
+
+## Tests (as planned; all landed in TS except the >10 refusal)
 
 - First run uploads all and posts; an identical rerun SKIPs with no uploads.
 - One panel's bytes change: one upload, an EDIT with the order kept, one delete.
@@ -54,6 +73,5 @@ Python (no slots store): `replace_files(ts, files: Sequence[tuple[str, bytes | s
 - A panel removed: an EDIT, and its file deleted.
 - The 3rd of 4 uploads fails: uploads 1–2 deleted, nothing written.
 - The write is refused vs. times out: new uploads deleted vs. kept, and reused ones untouched either way.
-- More than 10 files is refused.
 - A record from `upsertFile` without `fileHashes` uploads everything once, then dedupes.
 - Python: `replace_files` dedupes from the live message's `thrds_files` metadata.

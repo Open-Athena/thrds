@@ -1,3 +1,4 @@
+import { hash53Bytes } from "./hash";
 import {
   OrphanedRepliesError,
   THRDS_HASH,
@@ -8,6 +9,7 @@ import {
   toMsg,
   type Message,
   type MessageMetadata,
+  type Msg,
   type MsgLike,
   type Sender,
   type SyncOptions,
@@ -143,27 +145,56 @@ export class FileNotProcessedError extends Error {
 }
 
 /**
- * Attaching a newly uploaded file failed (`cause`). If Slack definitely refused the write, the upload was deleted
- * (`deleted`); otherwise the write may have landed, so the file is kept and `fileId` says which one it is.
+ * Attaching newly uploaded files failed (`cause`). If Slack definitely refused the write, this run's uploads were
+ * deleted (`deleted`); otherwise the write may have landed, so they're kept and `fileIds` says which they are. Files
+ * reused from the message's previous attachments are never deleted.
  */
 export class FileSwapError extends Error {
   constructor(
-    public readonly fileId: string,
+    public readonly fileIds: string[],
     public readonly deleted: boolean,
     options?: { cause?: unknown },
   ) {
-    super(`attaching file ${fileId} failed (${deleted ? "deleted the upload" : "kept the upload: the write may have landed"})`, options);
+    const what = fileIds.length === 1 ? `file ${fileIds[0]}` : `files ${fileIds.join(", ")}`;
+    const fate = deleted ? `deleted the upload${fileIds.length === 1 ? "" : "s"}` : `kept the upload${fileIds.length === 1 ? "" : "s"}: the write may have landed`;
+    super(`attaching ${what} failed (${fate})`, options);
     this.name = "FileSwapError";
+  }
+
+  /** The first (for a single-file swap, the only) upload. */
+  get fileId(): string | undefined {
+    return this.fileIds[0];
   }
 }
 
-/** What a file swap did: the new file's id, and which replaced files were deleted (or couldn't be). */
-export interface FileSwap {
-  fileId: string;
+/** The `metadata.event_payload` field the swap helpers stamp the attached files' content hashes into (in order). */
+export const FILE_HASHES = "thrds_files";
+
+/** A previously attached file: its id, and its content hash when known (from `FILE_HASHES`). */
+export interface AttachedFile {
+  id: string;
+  hash?: string;
+}
+
+/** What a file swap did. */
+export interface FilesSwap {
+  /** The message's files now, in order. */
+  fileIds: string[];
+  /** Which of them this run uploaded (the rest were already attached, with the same bytes). */
+  uploaded: string[];
+  /** Replaced files that were deleted. */
   deleted: string[];
   /** Replaced files whose `files.delete` failed (other than already being gone): delete them later, or by hand. */
   undeleted: Array<{ id: string; error: unknown }>;
 }
+
+/** A single-file swap: `FilesSwap` plus that file's id. */
+export interface FileSwap extends FilesSwap {
+  fileId: string;
+}
+
+/** A file to attach: its bytes (with a name and upload options). */
+export type FileSpec = { name: string; data: UploadData } & UploadOptions;
 
 /**
  * Whether Slack has processed an upload (`files.info`'s `file`): it reports a `mimetype`, and an image has thumbnails
@@ -194,34 +225,73 @@ export function definitelyNotAttached(e: unknown): boolean {
 }
 
 /**
- * Upload a replacement, `write` it (an edit or upsert that attaches it), then delete the `previous` files it replaced.
- * A write that fails deletes the new upload when Slack definitely refused it; either way it throws `FileSwapError`.
+ * Attach `desired` files in place of `previous` ones:
+ * 1. Each desired file reuses a previous file with the same content hash (each reused once), so unchanged or reordered
+ *    files aren't re-uploaded. The rest are uploaded (`concurrency` at a time, default 1); if an upload fails, this run's
+ *    uploads are deleted and the error is rethrown.
+ * 2. `write` attaches the resulting ids, in `desired` order (an edit or upsert with `files`).
+ * 3. Previous files that aren't attached any more are deleted, only after `write` succeeded.
+ *
+ * A `write` that fails deletes this run's uploads when Slack definitely refused it, and throws `FileSwapError`
+ * (rethrowing the error as-is when nothing was uploaded).
  */
-export async function swapFile<T>(
+export async function swapFiles<T>(
   client: Pick<SlackClient, "deleteFile">,
-  previous: readonly string[],
-  upload: () => Promise<string>,
-  write: (fileId: string) => Promise<T>,
-): Promise<FileSwap & { result: T }> {
-  const fileId = await upload();
-  let result: T;
-  try {
-    result = await write(fileId);
-  } catch (e) {
-    let deleted = false;
-    if (definitelyNotAttached(e)) {
+  previous: readonly AttachedFile[],
+  desired: ReadonlyArray<{ hash: string; upload: () => Promise<string> }>,
+  write: (fileIds: string[]) => Promise<T>,
+  options: { concurrency?: number } = {},
+): Promise<FilesSwap & { result: T }> {
+  const unused = [...previous];
+  const fileIds: Array<string | undefined> = desired.map(({ hash }) => {
+    const i = unused.findIndex((p) => p.hash !== undefined && p.hash === hash);
+    return i < 0 ? undefined : unused.splice(i, 1)[0]!.id;
+  });
+  const todo = desired.flatMap((d, i) => (fileIds[i] === undefined ? [i] : []));
+  const uploaded: string[] = [];
+  const failures: unknown[] = [];
+  let next = 0;
+  const worker = async (): Promise<void> => {
+    while (next < todo.length && failures.length === 0) {
+      const i = todo[next++]!;
       try {
-        await client.deleteFile(fileId);
-        deleted = true;
-      } catch {
-        // Reported via `deleted: false` and the id.
+        const id = await desired[i]!.upload();
+        fileIds[i] = id;
+        uploaded.push(id);
+      } catch (e) {
+        failures.push(e);
       }
     }
-    throw new FileSwapError(fileId, deleted, { cause: e });
+  };
+  await Promise.all(Array.from({ length: Math.max(1, Math.min(options.concurrency ?? 1, todo.length)) }, worker));
+  const cleanUp = async (): Promise<boolean> => {
+    let all = true;
+    for (const id of uploaded) {
+      try {
+        await client.deleteFile(id);
+      } catch {
+        all = false;
+      }
+    }
+    return all;
+  };
+  if (failures.length > 0) {
+    await cleanUp();
+    throw failures[0];
   }
-  const swap: FileSwap & { result: T } = { fileId, deleted: [], undeleted: [], result };
-  for (const id of previous) {
-    if (id === fileId) continue;
+  const ids = fileIds as string[];
+  let result: T;
+  try {
+    result = await write(ids);
+  } catch (e) {
+    if (uploaded.length === 0) throw e;
+    const deleted = definitelyNotAttached(e) && (await cleanUp());
+    throw new FileSwapError(uploaded, deleted, { cause: e });
+  }
+  const swap: FilesSwap & { result: T } = { fileIds: ids, uploaded, deleted: [], undeleted: [], result };
+  const kept = new Set(ids);
+  for (const { id } of unused) {
+    if (kept.has(id)) continue;
     try {
       await client.deleteFile(id);
       swap.deleted.push(id);
@@ -230,6 +300,27 @@ export async function swapFile<T>(
     }
   }
   return swap;
+}
+
+/** The files attached to a message as read back, with content hashes from its `FILE_HASHES` metadata when it lines up. */
+export function attachedFiles(m: Pick<SlackMessage, "files" | "metadata"> | null): AttachedFile[] {
+  const ids = (m?.files ?? []).map((f) => f["id"]).filter((id): id is string => typeof id === "string");
+  const hashes = m?.metadata?.event_payload?.[FILE_HASHES];
+  const aligned = Array.isArray(hashes) && hashes.length === ids.length && hashes.every((h) => typeof h === "string");
+  return ids.map((id, i) => (aligned ? { id, hash: hashes[i] as string } : { id }));
+}
+
+/** `m` with `files` attached and their content hashes stamped into its metadata (`FILE_HASHES`). */
+export function withFiles(m: MsgLike, fileIds: string[], hashes: string[]): Msg {
+  const msg = toMsg(m);
+  return {
+    ...msg,
+    files: fileIds,
+    metadata: {
+      event_type: msg.metadata?.event_type ?? "thrds",
+      event_payload: { ...msg.metadata?.event_payload, [FILE_HASHES]: hashes },
+    },
+  };
 }
 
 export interface UploadOptions {
@@ -773,26 +864,40 @@ export class SlackClient implements ThreadClient {
   }
 
   /**
-   * Swap the file attached to message `ts`: upload `file`, edit the message to `m` with only the new file attached,
-   * then delete the files it had. The previous files are read from the message (a history scope), unless `previous`
-   * is given. See `swapFile` for failures; `upsertFile` is the stored-state version.
+   * Keep the files attached to message `ts` current: each of `files` is uploaded unless the message already has a file
+   * with the same bytes, then the message is edited to `m` with exactly those files, in order, and the files it no
+   * longer has are deleted. The previous files (and their content hashes, from the message's metadata) are read from
+   * the message (a history scope), unless `previous` is given. See `swapFiles` for failures; `upsertFiles` is the
+   * stored-state version.
    */
-  async replaceFile(
+  async replaceFiles(
     ts: string,
-    file: { name: string; data: UploadData } & UploadOptions,
+    files: readonly FileSpec[],
     m: MsgLike,
-    options: { previous?: string[] } = {},
-  ): Promise<FileSwap> {
-    const previous =
-      options.previous ?? ((await this.message(ts))?.files ?? []).map((f) => f["id"]).filter((id): id is string => typeof id === "string");
-    const { name, data, ...uploadOptions } = file;
-    const { result: _result, ...swap } = await swapFile(
+    options: { previous?: AttachedFile[]; concurrency?: number } = {},
+  ): Promise<FilesSwap> {
+    const previous = options.previous ?? attachedFiles(await this.message(ts));
+    const desired = await Promise.all(
+      files.map(async ({ name, data, ...uploadOptions }) => {
+        const bytes = await toBytes(data);
+        return { hash: hash53Bytes(bytes), upload: () => this.upload(name, bytes, uploadOptions) };
+      }),
+    );
+    const hashes = desired.map((d) => d.hash);
+    const { result: _result, ...swap } = await swapFiles(
       this,
       previous,
-      () => this.upload(name, data, uploadOptions),
-      (id) => this.edit(ts, { ...toMsg(m), files: [id] }),
+      desired,
+      (ids) => this.edit(ts, withFiles(m, ids, hashes)),
+      options.concurrency !== undefined ? { concurrency: options.concurrency } : {},
     );
     return swap;
+  }
+
+  /** `replaceFiles` with one file. */
+  async replaceFile(ts: string, file: FileSpec, m: MsgLike, options: { previous?: AttachedFile[] } = {}): Promise<FileSwap> {
+    const swap = await this.replaceFiles(ts, [file], m, options);
+    return { ...swap, fileId: swap.fileIds[0]! };
   }
 
   /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */

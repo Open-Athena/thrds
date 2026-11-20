@@ -35,7 +35,10 @@ export type {
   SlackMessage,
   SlackPostOptions,
   SlackSyncOptions,
+  AttachedFile,
+  FileSpec,
   FileSwap,
+  FilesSwap,
   SlackUser,
   UploadData,
   UploadOptions,
@@ -53,7 +56,10 @@ export {
   USER_TTL_MS,
   definitelyNotAttached,
   isProcessed,
-  swapFile,
+  FILE_HASHES,
+  attachedFiles,
+  swapFiles,
+  withFiles,
   toBytes,
   webClientTransport,
 } from "./slack";
@@ -127,7 +133,6 @@ export type {
   UpsertResult,
 } from "./slots";
 export {
-  FILE_HASH,
   LeaseLostError,
   REJECTED,
   SLOT_KEY,
@@ -141,4 +146,5 @@ export {
   threadStore,
   upsert,
   upsertFile,
+  upsertFiles,
 } from "./slots";

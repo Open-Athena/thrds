@@ -13,7 +13,17 @@
 import { SlackApiError } from "./api";
 import { THRDS_HASH, msgHash, toMsg, type Message, type Msg, type MsgLike } from "./core";
 import { hash53Bytes } from "./hash";
-import { swapFile, toBytes, type FileSwap, type SlackClient, type SlackMessage, type UploadData, type UploadOptions } from "./slack";
+import {
+  FILE_HASHES,
+  swapFiles,
+  toBytes,
+  withFiles,
+  type AttachedFile,
+  type FileSpec,
+  type FilesSwap,
+  type SlackClient,
+  type SlackMessage,
+} from "./slack";
 
 /** Where a slot's message lives, and a hash of what was last sent there (`""`: unknown, so the next run edits once). */
 export interface SlotRecord {
@@ -21,11 +31,18 @@ export interface SlotRecord {
   hash: string;
   /** The file ids attached to the message (`Msg.files`), so a later run can delete the ones it replaces. */
   files?: string[];
+  /** Their content hashes, in the same order (from the message's `FILE_HASHES` metadata), so unchanged ones are reused. */
+  fileHashes?: string[];
 }
 
-/** A record, with `files` only when there are some. */
-const slotRecord = (ts: string, hash: string, files: string[] | undefined): SlotRecord =>
-  files !== undefined && files.length > 0 ? { ts, hash, files } : { ts, hash };
+/** A record, with `files` (and `fileHashes`, when they line up) only when there are some. */
+function slotRecord(ts: string, hash: string, files: string[] | undefined, fileHashes: unknown): SlotRecord {
+  if (files === undefined || files.length === 0) return { ts, hash };
+  const aligned = Array.isArray(fileHashes) && fileHashes.length === files.length && fileHashes.every((h) => typeof h === "string");
+  return aligned ? { ts, hash, files, fileHashes: fileHashes as string[] } : { ts, hash, files };
+}
+
+const fileHashesOf = (m: Msg): unknown => m.metadata?.event_payload?.[FILE_HASHES];
 
 export interface SlotState {
   /** The channel the thread lives in. A run in a different channel starts a new thread there. */
@@ -342,7 +359,7 @@ export async function syncSlots(
         await save();
         ts = (await client.post(sent, threadTs)).id;
       }
-      record(slot, slotRecord(ts, msgHash(sent), sent.files));
+      record(slot, slotRecord(ts, msgHash(sent), sent.files, fileHashesOf(sent)));
       delete state.pending;
       await save();
       return { ts, fell: sent !== msg };
@@ -386,6 +403,7 @@ export async function syncSlots(
       }
       let sentHash = hash;
       let sentFiles = msg.files;
+      let sentFileHashes = fileHashesOf(msg);
       let fell = false;
       try {
         await beforeWrite();
@@ -397,6 +415,7 @@ export async function syncSlots(
           await client.edit(target.ts, fb);
           sentHash = msgHash(fb);
           sentFiles = fb.files;
+          sentFileHashes = fileHashesOf(fb);
           fell = true;
         }
       } catch (e) {
@@ -416,7 +435,12 @@ export async function syncSlots(
         return { ts, reposted: true };
       }
       // An edit without `files` leaves the attached ones in place.
-      record(slot, slotRecord(target.ts, sentHash, sentFiles ?? current?.files));
+      record(
+        slot,
+        sentFiles !== undefined
+          ? slotRecord(target.ts, sentHash, sentFiles, sentFileHashes)
+          : slotRecord(target.ts, sentHash, current?.files, current?.fileHashes),
+      );
       state.channel = client.channel;
       // An edit needs no write-ahead: a lost hash only means one more edit next run.
       unsaved = true;
@@ -560,54 +584,61 @@ export async function upsert(
   return { status: result.status, ts: result.ts, action: result.actions.at(-1)?.type ?? null };
 }
 
-/** The `metadata.event_payload` field `upsertFile` stamps the attached file's content hash into. */
-export const FILE_HASH = "thrds_file";
-
 export type UpsertResult = Awaited<ReturnType<typeof upsert>>;
 
 /**
- * One message kept in place under `key` with one attached file (`Msg.files`), e.g. an hourly status card whose image
- * phone users can download. Each run uploads `file`, upserts `msg` with it attached, then deletes the file it replaced
- * (the store's record lists the attached files). If the bytes and the message are what's already there, nothing is
- * uploaded and the upsert skips. A failed write deletes the new upload when Slack definitely refused it, and throws
- * `FileSwapError` (with the upload's id) either way. `fileId` is null only when nothing was posted (`create: false`).
+ * One message kept in place under `key` with live attached files (`Msg.files`), e.g. an hourly status card whose
+ * panels phone users can download. Each file is hashed; one whose bytes the message already has is reused, the rest
+ * are uploaded (waiting until Slack has processed them). Then `msg` is upserted with exactly those files, in order, and
+ * the files it no longer has are deleted. The store's record keeps the attached ids and hashes; the hashes are also
+ * stamped into the message's metadata (`FILE_HASHES`). Unchanged bytes and message: no uploads, and the upsert skips.
+ * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens.
  */
+export async function upsertFiles(
+  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">,
+  store: SlotStore,
+  key: string,
+  msg: MsgLike,
+  files: readonly FileSpec[],
+  options: UpsertOptions & { concurrency?: number } = {},
+): Promise<UpsertResult & FilesSwap> {
+  const { concurrency, ...upsertOptions } = options;
+  const record = (await store.get(key))?.parent;
+  if (record === undefined && options.create === false && options.ts === undefined) {
+    return { ...(await upsert(client, store, key, msg, upsertOptions)), fileIds: [], uploaded: [], deleted: [], undeleted: [] };
+  }
+  const previous: AttachedFile[] = (record?.files ?? []).map((id, i) => {
+    const hash = record?.fileHashes?.[i];
+    return hash === undefined ? { id } : { id, hash };
+  });
+  const desired = await Promise.all(
+    files.map(async ({ name, data, ...uploadOptions }) => {
+      const bytes = await toBytes(data);
+      return { hash: hash53Bytes(bytes), upload: () => client.upload(name, bytes, uploadOptions) };
+    }),
+  );
+  const hashes = desired.map((d) => d.hash);
+  const { result, ...swap } = await swapFiles(
+    client,
+    previous,
+    desired,
+    (ids) => upsert(client, store, key, withFiles(msg, ids, hashes), upsertOptions),
+    concurrency !== undefined ? { concurrency } : {},
+  );
+  return { ...result, ...swap };
+}
+
+/** `upsertFiles` with one file; `fileId` is null only when nothing was posted (`create: false`). */
 export async function upsertFile(
   client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">,
   store: SlotStore,
   key: string,
   msg: MsgLike,
-  file: { name: string; data: UploadData } & UploadOptions,
+  file: FileSpec,
   options: UpsertOptions = {},
-): Promise<UpsertResult & Omit<FileSwap, "fileId"> & { fileId: string | null }> {
-  const { name, data, ...uploadOptions } = file;
-  const bytes = await toBytes(data);
-  const base = toMsg(msg);
-  const withFile = (files: string[]): Msg => ({
-    ...base,
-    files,
-    metadata: {
-      event_type: base.metadata?.event_type ?? "thrds_slot",
-      event_payload: { ...base.metadata?.event_payload, [FILE_HASH]: hash53Bytes(bytes) },
-    },
-  });
-  const record = (await store.get(key))?.parent;
-  const previous = record?.files ?? [];
-  const none = { deleted: [], undeleted: [] };
-  if (record === undefined && options.create === false && options.ts === undefined) {
-    return { ...(await upsert(client, store, key, base, options)), fileId: null, ...none };
-  }
-  // The same bytes and message as last time: keep the attached file, so nothing is uploaded and the upsert skips.
-  if (!options.force && previous.length === 1 && record !== undefined && msgHash(tagSlot(withFile(previous), key, null)) === record.hash) {
-    return { ...(await upsert(client, store, key, withFile(previous), options)), fileId: previous[0]!, ...none };
-  }
-  const { result, ...swap } = await swapFile(
-    client,
-    previous,
-    () => client.upload(name, bytes, uploadOptions),
-    (id) => upsert(client, store, key, withFile([id]), options),
-  );
-  return { ...result, ...swap };
+): Promise<UpsertResult & FilesSwap & { fileId: string | null }> {
+  const r = await upsertFiles(client, store, key, msg, [file], options);
+  return { ...r, fileId: r.fileIds[0] ?? null };
 }
 
 /** Seed a store with messages posted before thrds managed them (hash unknown: each is edited once on the next run). */
