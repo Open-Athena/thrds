@@ -1,5 +1,6 @@
 import {
   CHANNEL_TTL_MS,
+  FILE_HASHES,
   FileNotProcessedError,
   FileSwapError,
   FilesNotAttachedError,
@@ -12,6 +13,7 @@ import {
   SlackClient,
   USERNAME_MAX,
   USER_TTL_MS,
+  attachedFiles,
   buildDetailMessages,
   buildSummaryMessages,
   collect,
@@ -22,10 +24,11 @@ import {
   slackApi,
   slackCall,
   splitBody,
-  swapFile,
+  swapFiles,
   toBytes,
-  webClientTransport
-} from "./chunk-OEYKFBJH.js";
+  webClientTransport,
+  withFiles
+} from "./chunk-33PDEAXS.js";
 import {
   EditRateLimited,
   OrphanedRepliesError,
@@ -277,7 +280,12 @@ function withoutPermalinks(text) {
 }
 
 // src/slots.ts
-var slotRecord = (ts, hash, files) => files !== void 0 && files.length > 0 ? { ts, hash, files } : { ts, hash };
+function slotRecord(ts, hash, files, fileHashes) {
+  if (files === void 0 || files.length === 0) return { ts, hash };
+  const aligned = Array.isArray(fileHashes) && fileHashes.length === files.length && fileHashes.every((h) => typeof h === "string");
+  return aligned ? { ts, hash, files, fileHashes } : { ts, hash, files };
+}
+var fileHashesOf = (m) => m.metadata?.event_payload?.[FILE_HASHES];
 var LeaseLostError = class extends Error {
   constructor(key) {
     super(`slot lease lost for ${key}: another run took over`);
@@ -435,7 +443,7 @@ async function syncSlots(client, store, thread, options = {}) {
         await save();
         ts = (await client.post(sent, threadTs)).id;
       }
-      record(slot, slotRecord(ts, msgHash(sent), sent.files));
+      record(slot, slotRecord(ts, msgHash(sent), sent.files, fileHashesOf(sent)));
       delete state.pending;
       await save();
       return { ts, fell: sent !== msg };
@@ -468,6 +476,7 @@ async function syncSlots(client, store, thread, options = {}) {
       }
       let sentHash = hash;
       let sentFiles = msg.files;
+      let sentFileHashes = fileHashesOf(msg);
       let fell = false;
       try {
         await beforeWrite();
@@ -479,6 +488,7 @@ async function syncSlots(client, store, thread, options = {}) {
           await client.edit(target.ts, fb);
           sentHash = msgHash(fb);
           sentFiles = fb.files;
+          sentFileHashes = fileHashesOf(fb);
           fell = true;
         }
       } catch (e) {
@@ -496,7 +506,10 @@ async function syncSlots(client, store, thread, options = {}) {
         actions2.push({ type: refell ? "FALLBACK" : "REPOST", slot, ts });
         return { ts, reposted: true };
       }
-      record(slot, slotRecord(target.ts, sentHash, sentFiles ?? current?.files));
+      record(
+        slot,
+        sentFiles !== void 0 ? slotRecord(target.ts, sentHash, sentFiles, sentFileHashes) : slotRecord(target.ts, sentHash, current?.files, current?.fileHashes)
+      );
       state.channel = client.channel;
       unsaved = true;
       actions2.push({ type: fell ? "FALLBACK" : "EDIT", slot, ts: target.ts });
@@ -613,35 +626,35 @@ async function upsert(client, store, key, msg, options = {}) {
   const result = await syncSlots(client, store, { key, parent }, rest);
   return { status: result.status, ts: result.ts, action: result.actions.at(-1)?.type ?? null };
 }
-var FILE_HASH = "thrds_file";
-async function upsertFile(client, store, key, msg, file, options = {}) {
-  const { name, data, ...uploadOptions } = file;
-  const bytes = await toBytes(data);
-  const base = toMsg(msg);
-  const withFile = (files) => ({
-    ...base,
-    files,
-    metadata: {
-      event_type: base.metadata?.event_type ?? "thrds_slot",
-      event_payload: { ...base.metadata?.event_payload, [FILE_HASH]: hash53Bytes(bytes) }
-    }
-  });
+async function upsertFiles(client, store, key, msg, files, options = {}) {
+  const { concurrency, ...upsertOptions } = options;
   const record = (await store.get(key))?.parent;
-  const previous = record?.files ?? [];
-  const none = { deleted: [], undeleted: [] };
   if (record === void 0 && options.create === false && options.ts === void 0) {
-    return { ...await upsert(client, store, key, base, options), fileId: null, ...none };
+    return { ...await upsert(client, store, key, msg, upsertOptions), fileIds: [], uploaded: [], deleted: [], undeleted: [] };
   }
-  if (!options.force && previous.length === 1 && record !== void 0 && msgHash(tagSlot(withFile(previous), key, null)) === record.hash) {
-    return { ...await upsert(client, store, key, withFile(previous), options), fileId: previous[0], ...none };
-  }
-  const { result, ...swap } = await swapFile(
+  const previous = (record?.files ?? []).map((id, i) => {
+    const hash = record?.fileHashes?.[i];
+    return hash === void 0 ? { id } : { id, hash };
+  });
+  const desired = await Promise.all(
+    files.map(async ({ name, data, ...uploadOptions }) => {
+      const bytes = await toBytes(data);
+      return { hash: hash53Bytes(bytes), upload: () => client.upload(name, bytes, uploadOptions) };
+    })
+  );
+  const hashes = desired.map((d) => d.hash);
+  const { result, ...swap } = await swapFiles(
     client,
     previous,
-    () => client.upload(name, bytes, uploadOptions),
-    (id) => upsert(client, store, key, withFile([id]), options)
+    desired,
+    (ids) => upsert(client, store, key, withFiles(msg, ids, hashes), upsertOptions),
+    concurrency !== void 0 ? { concurrency } : {}
   );
   return { ...result, ...swap };
+}
+async function upsertFile(client, store, key, msg, file, options = {}) {
+  const r = await upsertFiles(client, store, key, msg, [file], options);
+  return { ...r, fileId: r.fileIds[0] ?? null };
 }
 async function importAnchor(store, key, anchor) {
   const state = { slots: {} };
@@ -733,7 +746,7 @@ function threadStore(client, threadTs) {
 export {
   CHANNEL_TTL_MS,
   EditRateLimited,
-  FILE_HASH,
+  FILE_HASHES,
   FileNotProcessedError,
   FileSwapError,
   FilesNotAttachedError,
@@ -754,6 +767,7 @@ export {
   USERNAME_MAX,
   USER_TTL_MS,
   actions,
+  attachedFiles,
   bound,
   buildDetailMessages,
   buildPermalink,
@@ -800,7 +814,7 @@ export {
   splitBody,
   stableStringify,
   staticSelect,
-  swapFile,
+  swapFiles,
   sync,
   syncSlots,
   tagSlot,
@@ -809,9 +823,11 @@ export {
   toMsg,
   upsert,
   upsertFile,
+  upsertFiles,
   usersSelect,
   versionedUrl,
   webClientTransport,
+  withFiles,
   withoutImages,
   withoutPermalinks
 };

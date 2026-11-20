@@ -1,5 +1,5 @@
 import { d as MsgLike, M as Message, c as Msg } from './core-BNb_OG-w.js';
-import { o as SlackMessage, k as SlackClient, v as UploadData, w as UploadOptions, b as FileSwap } from './slack-Czh9-JyB.js';
+import { s as SlackMessage, o as SlackClient, d as FileSpec, h as FilesSwap } from './slack-8iIIb99E.js';
 
 /** Where a slot's message lives, and a hash of what was last sent there (`""`: unknown, so the next run edits once). */
 interface SlotRecord {
@@ -7,6 +7,8 @@ interface SlotRecord {
     hash: string;
     /** The file ids attached to the message (`Msg.files`), so a later run can delete the ones it replaces. */
     files?: string[];
+    /** Their content hashes, in the same order (from the message's `FILE_HASHES` metadata), so unchanged ones are reused. */
+    fileHashes?: string[];
 }
 interface SlotState {
     /** The channel the thread lives in. A run in a different channel starts a new thread there. */
@@ -161,20 +163,20 @@ declare function upsert(client: SlotClient, store: SlotStore, key: string, msg: 
     ts: string;
     action: SlotActionType | null;
 }>;
-/** The `metadata.event_payload` field `upsertFile` stamps the attached file's content hash into. */
-declare const FILE_HASH = "thrds_file";
 type UpsertResult = Awaited<ReturnType<typeof upsert>>;
 /**
- * One message kept in place under `key` with one attached file (`Msg.files`), e.g. an hourly status card whose image
- * phone users can download. Each run uploads `file`, upserts `msg` with it attached, then deletes the file it replaced
- * (the store's record lists the attached files). If the bytes and the message are what's already there, nothing is
- * uploaded and the upsert skips. A failed write deletes the new upload when Slack definitely refused it, and throws
- * `FileSwapError` (with the upload's id) either way. `fileId` is null only when nothing was posted (`create: false`).
+ * One message kept in place under `key` with live attached files (`Msg.files`), e.g. an hourly status card whose
+ * panels phone users can download. Each file is hashed; one whose bytes the message already has is reused, the rest
+ * are uploaded (waiting until Slack has processed them). Then `msg` is upserted with exactly those files, in order, and
+ * the files it no longer has are deleted. The store's record keeps the attached ids and hashes; the hashes are also
+ * stamped into the message's metadata (`FILE_HASHES`). Unchanged bytes and message: no uploads, and the upsert skips.
+ * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens.
  */
-declare function upsertFile(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">, store: SlotStore, key: string, msg: MsgLike, file: {
-    name: string;
-    data: UploadData;
-} & UploadOptions, options?: UpsertOptions): Promise<UpsertResult & Omit<FileSwap, "fileId"> & {
+declare function upsertFiles(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">, store: SlotStore, key: string, msg: MsgLike, files: readonly FileSpec[], options?: UpsertOptions & {
+    concurrency?: number;
+}): Promise<UpsertResult & FilesSwap>;
+/** `upsertFiles` with one file; `fileId` is null only when nothing was posted (`create: false`). */
+declare function upsertFile(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">, store: SlotStore, key: string, msg: MsgLike, file: FileSpec, options?: UpsertOptions): Promise<UpsertResult & FilesSwap & {
     fileId: string | null;
 }>;
 /** Seed a store with messages posted before thrds managed them (hash unknown: each is edited once on the next run). */
@@ -203,4 +205,4 @@ declare function oneKeyStore(io: {
  */
 declare function threadStore(client: SlotClient, threadTs: string): SlotStore;
 
-export { FILE_HASH as F, LeaseLostError as L, REJECTED as R, SLOT_KEY as S, type UpsertOptions as U, type RenderedSlotThread as a, SLOT_NAME as b, type SlotAction as c, type SlotActionType as d, type SlotClient as e, type SlotParent as f, type SlotRecord as g, type SlotSpec as h, type SlotState as i, type SlotStore as j, type SlotSyncOptions as k, type SlotSyncResult as l, type SlotThread as m, type SlotThreadSpec as n, type UpsertResult as o, importAnchor as p, memoryStore as q, oneKeyStore as r, partialOf as s, syncSlots as t, tagSlot as u, threadStore as v, upsert as w, upsertFile as x };
+export { LeaseLostError as L, REJECTED as R, SLOT_KEY as S, type UpsertOptions as U, type RenderedSlotThread as a, SLOT_NAME as b, type SlotAction as c, type SlotActionType as d, type SlotClient as e, type SlotParent as f, type SlotRecord as g, type SlotSpec as h, type SlotState as i, type SlotStore as j, type SlotSyncOptions as k, type SlotSyncResult as l, type SlotThread as m, type SlotThreadSpec as n, type UpsertResult as o, importAnchor as p, memoryStore as q, oneKeyStore as r, partialOf as s, syncSlots as t, tagSlot as u, threadStore as v, upsert as w, upsertFile as x, upsertFiles as y };

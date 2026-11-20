@@ -1,4 +1,4 @@
-import { h as ThreadClient, S as Sender, U as Unfurl, M as Message, b as MessageMetadata, d as MsgLike, g as Thread, e as SyncOptions, f as SyncResult } from './core-BNb_OG-w.js';
+import { h as ThreadClient, S as Sender, U as Unfurl, M as Message, b as MessageMetadata, d as MsgLike, g as Thread, e as SyncOptions, f as SyncResult, c as Msg } from './core-BNb_OG-w.js';
 
 /**
  * Slack Web API transport: one place for the `Bearer` + JSON/query request, the `ok` check, retries and timeouts that
@@ -209,19 +209,33 @@ declare class FileNotProcessedError extends Error {
     constructor(fileId: string, waitedMs: number, deleted: boolean);
 }
 /**
- * Attaching a newly uploaded file failed (`cause`). If Slack definitely refused the write, the upload was deleted
- * (`deleted`); otherwise the write may have landed, so the file is kept and `fileId` says which one it is.
+ * Attaching newly uploaded files failed (`cause`). If Slack definitely refused the write, this run's uploads were
+ * deleted (`deleted`); otherwise the write may have landed, so they're kept and `fileIds` says which they are. Files
+ * reused from the message's previous attachments are never deleted.
  */
 declare class FileSwapError extends Error {
-    readonly fileId: string;
+    readonly fileIds: string[];
     readonly deleted: boolean;
-    constructor(fileId: string, deleted: boolean, options?: {
+    constructor(fileIds: string[], deleted: boolean, options?: {
         cause?: unknown;
     });
+    /** The first (for a single-file swap, the only) upload. */
+    get fileId(): string | undefined;
 }
-/** What a file swap did: the new file's id, and which replaced files were deleted (or couldn't be). */
-interface FileSwap {
-    fileId: string;
+/** The `metadata.event_payload` field the swap helpers stamp the attached files' content hashes into (in order). */
+declare const FILE_HASHES = "thrds_files";
+/** A previously attached file: its id, and its content hash when known (from `FILE_HASHES`). */
+interface AttachedFile {
+    id: string;
+    hash?: string;
+}
+/** What a file swap did. */
+interface FilesSwap {
+    /** The message's files now, in order. */
+    fileIds: string[];
+    /** Which of them this run uploaded (the rest were already attached, with the same bytes). */
+    uploaded: string[];
+    /** Replaced files that were deleted. */
     deleted: string[];
     /** Replaced files whose `files.delete` failed (other than already being gone): delete them later, or by hand. */
     undeleted: Array<{
@@ -229,6 +243,15 @@ interface FileSwap {
         error: unknown;
     }>;
 }
+/** A single-file swap: `FilesSwap` plus that file's id. */
+interface FileSwap extends FilesSwap {
+    fileId: string;
+}
+/** A file to attach: its bytes (with a name and upload options). */
+type FileSpec = {
+    name: string;
+    data: UploadData;
+} & UploadOptions;
 /**
  * Whether Slack has processed an upload (`files.info`'s `file`): it reports a `mimetype`, and an image has thumbnails
  * (`thumb_*`), which it can lack for a moment after the `mimetype` appears (disky waited for both, and saw images render
@@ -241,12 +264,28 @@ declare function toBytes(data: UploadData): Promise<Uint8Array>;
 /** Whether a failed write certainly didn't attach anything: Slack refused it, or refused the edit after a post. */
 declare function definitelyNotAttached(e: unknown): boolean;
 /**
- * Upload a replacement, `write` it (an edit or upsert that attaches it), then delete the `previous` files it replaced.
- * A write that fails deletes the new upload when Slack definitely refused it; either way it throws `FileSwapError`.
+ * Attach `desired` files in place of `previous` ones:
+ * 1. Each desired file reuses a previous file with the same content hash (each reused once), so unchanged or reordered
+ *    files aren't re-uploaded. The rest are uploaded (`concurrency` at a time, default 1); if an upload fails, this run's
+ *    uploads are deleted and the error is rethrown.
+ * 2. `write` attaches the resulting ids, in `desired` order (an edit or upsert with `files`).
+ * 3. Previous files that aren't attached any more are deleted, only after `write` succeeded.
+ *
+ * A `write` that fails deletes this run's uploads when Slack definitely refused it, and throws `FileSwapError`
+ * (rethrowing the error as-is when nothing was uploaded).
  */
-declare function swapFile<T>(client: Pick<SlackClient, "deleteFile">, previous: readonly string[], upload: () => Promise<string>, write: (fileId: string) => Promise<T>): Promise<FileSwap & {
+declare function swapFiles<T>(client: Pick<SlackClient, "deleteFile">, previous: readonly AttachedFile[], desired: ReadonlyArray<{
+    hash: string;
+    upload: () => Promise<string>;
+}>, write: (fileIds: string[]) => Promise<T>, options?: {
+    concurrency?: number;
+}): Promise<FilesSwap & {
     result: T;
 }>;
+/** The files attached to a message as read back, with content hashes from its `FILE_HASHES` metadata when it lines up. */
+declare function attachedFiles(m: Pick<SlackMessage, "files" | "metadata"> | null): AttachedFile[];
+/** `m` with `files` attached and their content hashes stamped into its metadata (`FILE_HASHES`). */
+declare function withFiles(m: MsgLike, fileIds: string[], hashes: string[]): Msg;
 interface UploadOptions {
     /** Share the file into this channel, which posts a file message. Unshared by default. */
     channel?: string;
@@ -440,15 +479,19 @@ declare class SlackClient implements ThreadClient {
      */
     private sendUpload;
     /**
-     * Swap the file attached to message `ts`: upload `file`, edit the message to `m` with only the new file attached,
-     * then delete the files it had. The previous files are read from the message (a history scope), unless `previous`
-     * is given. See `swapFile` for failures; `upsertFile` is the stored-state version.
+     * Keep the files attached to message `ts` current: each of `files` is uploaded unless the message already has a file
+     * with the same bytes, then the message is edited to `m` with exactly those files, in order, and the files it no
+     * longer has are deleted. The previous files (and their content hashes, from the message's metadata) are read from
+     * the message (a history scope), unless `previous` is given. See `swapFiles` for failures; `upsertFiles` is the
+     * stored-state version.
      */
-    replaceFile(ts: string, file: {
-        name: string;
-        data: UploadData;
-    } & UploadOptions, m: MsgLike, options?: {
-        previous?: string[];
+    replaceFiles(ts: string, files: readonly FileSpec[], m: MsgLike, options?: {
+        previous?: AttachedFile[];
+        concurrency?: number;
+    }): Promise<FilesSwap>;
+    /** `replaceFiles` with one file. */
+    replaceFile(ts: string, file: FileSpec, m: MsgLike, options?: {
+        previous?: AttachedFile[];
     }): Promise<FileSwap>;
     /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */
     fileInfo(id: string): Promise<Record<string, unknown>>;
@@ -543,4 +586,4 @@ declare class SlackClient implements ThreadClient {
     }): Promise<LinkedSyncResult>;
 }
 
-export { type Auth as A, type BulletFn as B, CHANNEL_TTL_MS as C, defaultBullet as D, definitelyNotAttached as E, FileNotProcessedError as F, isProcessed as G, paginate as H, slackApi as I, slackCall as J, splitBody as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, swapFile as O, toBytes as P, webClientTransport as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, type CallOptions as a, type FileSwap as b, FileSwapError as c, FilesNotAttachedError as d, type LinkedThread as e, NOT_FOUND_TTL_MS as f, type RetryInfo as g, SLACK_MESSAGE_LIMIT as h, type Section as i, SlackApiError as j, SlackClient as k, type SlackClientOptions as l, type SlackDeleteOptions as m, type SlackErrorKind as n, type SlackMessage as o, type SlackPostOptions as p, type SlackResponse as q, type SlackSyncOptions as r, type SlackUser as s, type TransportOptions as t, USER_TTL_MS as u, type UploadData as v, type UploadOptions as w, buildDetailMessages as x, buildSummaryMessages as y, collect as z };
+export { type AttachedFile as A, type BulletFn as B, CHANNEL_TTL_MS as C, type UploadOptions as D, attachedFiles as E, FILE_HASHES as F, buildDetailMessages as G, buildSummaryMessages as H, collect as I, defaultBullet as J, definitelyNotAttached as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, isProcessed as O, paginate as P, slackApi as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, slackCall as V, splitBody as W, swapFiles as X, toBytes as Y, webClientTransport as Z, withFiles as _, type Auth as a, type CallOptions as b, FileNotProcessedError as c, type FileSpec as d, type FileSwap as e, FileSwapError as f, FilesNotAttachedError as g, type FilesSwap as h, type LinkedThread as i, NOT_FOUND_TTL_MS as j, type RetryInfo as k, SLACK_MESSAGE_LIMIT as l, type Section as m, SlackApiError as n, SlackClient as o, type SlackClientOptions as p, type SlackDeleteOptions as q, type SlackErrorKind as r, type SlackMessage as s, type SlackPostOptions as t, type SlackResponse as u, type SlackSyncOptions as v, type SlackUser as w, type TransportOptions as x, USER_TTL_MS as y, type UploadData as z };

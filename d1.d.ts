@@ -1,7 +1,7 @@
 import { AvatarStore } from './avatar.js';
-import { j as SlotStore } from './slots-CJ_mAbzm.js';
+import { j as SlotStore } from './slots-BEi-ECHS.js';
 import './core-BNb_OG-w.js';
-import './slack-Czh9-JyB.js';
+import './slack-8iIIb99E.js';
 
 /**
  * `@open-athena/thrds/d1`: Cloudflare D1 storage for slot state (with compare-and-swap leases) and hosted avatars.
