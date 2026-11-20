@@ -155,26 +155,67 @@ class FileNotProcessedError(RuntimeError):
 
 
 class FileSwapError(RuntimeError):
-    """Attaching a newly uploaded file failed (``__cause__``). If Slack
-    definitely refused the write, the upload was deleted (``deleted``);
-    otherwise the write may have landed, so the file is kept."""
-    def __init__(self, file_id: str, deleted: bool):
-        super().__init__(
-            f"attaching file {file_id} failed ("
-            + ("deleted the upload" if deleted else "kept the upload: the write may have landed")
-            + ")"
-        )
-        self.file_id = file_id
+    """Attaching newly uploaded files failed (``__cause__``). If Slack
+    definitely refused the write, this run's uploads were deleted
+    (``deleted``); otherwise the write may have landed, so they're kept and
+    ``file_ids`` says which they are. Reused files are never deleted."""
+    def __init__(self, file_ids: Sequence[str], deleted: bool):
+        ids = list(file_ids)
+        what = f"file {ids[0]}" if len(ids) == 1 else f"files {', '.join(ids)}"
+        s = "" if len(ids) == 1 else "s"
+        fate = f"deleted the upload{s}" if deleted else f"kept the upload{s}: the write may have landed"
+        super().__init__(f"attaching {what} failed ({fate})")
+        self.file_ids = ids
         self.deleted = deleted
+
+    @property
+    def file_id(self) -> str | None:
+        """The first (for a single-file swap, the only) upload."""
+        return self.file_ids[0] if self.file_ids else None
+
+
+FILE_HASHES = "thrds_files"
+"""The ``metadata.event_payload`` field the swap helpers stamp the attached
+files' content hashes into, in order (shared with the TS toolkit)."""
 
 
 @dataclass
-class FileSwap:
-    """What `replace_file` did: the new file's id, and which replaced files
-    were deleted, or couldn't be (``undeleted``: ``(id, error)`` pairs)."""
-    file_id: str
+class FilesSwap:
+    """What `replace_files` did: the message's files now (``file_ids``, in
+    order), which of them this run uploaded, and which replaced files were
+    deleted, or couldn't be (``undeleted``: ``(id, error)`` pairs)."""
+    file_ids: list[str]
+    uploaded: list[str] = field(default_factory=list)
     deleted: list[str] = field(default_factory=list)
     undeleted: list[tuple[str, Exception]] = field(default_factory=list)
+
+    @property
+    def file_id(self) -> str | None:
+        """The first (for a single-file swap, the only) file."""
+        return self.file_ids[0] if self.file_ids else None
+
+
+@dataclass
+class FileSpec:
+    """A file to attach: its name and bytes (a ``str`` is sent as UTF-8)."""
+    name: str
+    data: bytes | str
+    title: str | None = None
+    alt_text: str | None = None
+
+
+def hash53_bytes(data: bytes, seed: int = 0) -> str:
+    """cyrb53 over bytes, as 14 hex digits: the TS toolkit's `hash53Bytes`,
+    bit for bit, so a message's ``thrds_files`` hashes dedupe across both."""
+    m = 0xFFFFFFFF
+    h1 = (0xDEADBEEF ^ seed) & m
+    h2 = (0x41C6CE57 ^ seed) & m
+    for c in data:
+        h1 = ((h1 ^ c) * 2654435761) & m
+        h2 = ((h2 ^ c) * 1597334677) & m
+    h1 = (((h1 ^ (h1 >> 16)) * 2246822507) & m) ^ (((h2 ^ (h2 >> 13)) * 3266489909) & m)
+    h2 = (((h2 ^ (h2 >> 16)) * 2246822507) & m) ^ (((h1 ^ (h1 >> 13)) * 3266489909) & m)
+    return format(4294967296 * (2097151 & h2) + h1, "014x")
 
 
 _THUMB = re.compile(r"^thumb_\d+$")
@@ -953,6 +994,103 @@ class SlackClient:
                 raise failure from cause
             time.sleep(wait)
 
+    def attached_files(self, ts: str) -> list[tuple[str, str | None]]:
+        """Message ``ts``'s attached files as ``(id, content hash)`` pairs,
+        the hash from its ``thrds_files`` metadata when that lines up (else
+        ``None``). Needs a history scope."""
+        result = self._request("conversations.replies", {
+            "channel": self.channel, "ts": ts, "limit": 1, "include_all_metadata": True,
+        }, method="GET")
+        msgs = result.get("messages") or []
+        m = msgs[0] if msgs and msgs[0].get("ts") == ts else {}
+        ids = [f["id"] for f in m.get("files", []) if isinstance(f.get("id"), str)]
+        hashes = ((m.get("metadata") or {}).get("event_payload") or {}).get(FILE_HASHES)
+        aligned = isinstance(hashes, list) and len(hashes) == len(ids) and all(isinstance(h, str) for h in hashes)
+        return [(i, hashes[n] if aligned else None) for n, i in enumerate(ids)]
+
+    def replace_files(
+        self,
+        ts: str,
+        files: Sequence[FileSpec | tuple[str, bytes | str]],
+        content: str,
+        *,
+        raw: bool | None = None,
+        metadata: dict | None = None,
+        previous: Sequence[tuple[str, str | None]] | None = None,
+    ) -> FilesSwap:
+        """Keep the files attached to message ``ts`` current (the hourly-card
+        pattern, for one file or several):
+
+        1. Each file is hashed (`hash53_bytes`). One whose bytes the message
+           already has is reused (matched by hash, not position); the rest are
+           uploaded, waiting until Slack has processed them. If an upload
+           fails, this run's uploads are deleted and the error re-raised.
+        2. The message is edited to ``content`` with exactly those files, in
+           order, and their hashes stamped into its metadata
+           (``thrds_files``, merged into ``metadata``).
+        3. Files it no longer has are deleted, only after the edit succeeded
+           (already gone is fine; other failures land in ``undeleted``).
+
+        ``previous`` (``(id, hash or None)`` pairs) defaults to what the
+        message has (`attached_files`, a history scope). An edit Slack
+        definitely refused deletes this run's uploads; one that may have
+        landed (timeout, 5xx) keeps them. Either way it raises
+        `FileSwapError` with their ids, or re-raises as-is if nothing was
+        uploaded.
+        """
+        specs = [f if isinstance(f, FileSpec) else FileSpec(*f) for f in files]
+        bodies = [s.data.encode() if isinstance(s.data, str) else s.data for s in specs]
+        hashes = [hash53_bytes(b) for b in bodies]
+        unused = list(self.attached_files(ts) if previous is None else previous)
+        ids: list[str | None] = []
+        for h in hashes:
+            hit = next((n for n, (_, ph) in enumerate(unused) if ph is not None and ph == h), None)
+            ids.append(None if hit is None else unused.pop(hit)[0])
+        uploaded: list[str] = []
+
+        def clean_up() -> bool:
+            ok = True
+            for fid in uploaded:
+                try:
+                    self.delete_file(fid)
+                except Exception:
+                    ok = False
+            return ok
+
+        try:
+            for n, (spec, body) in enumerate(zip(specs, bodies)):
+                if ids[n] is None:
+                    fid = self.upload(spec.name, body, title=spec.title, alt_text=spec.alt_text)
+                    ids[n] = fid
+                    uploaded.append(fid)
+        except Exception:
+            clean_up()
+            raise
+        file_ids = [i for i in ids if i is not None]
+        md = metadata or {}
+        stamped = {
+            "event_type": md.get("event_type", "thrds"),
+            "event_payload": {**(md.get("event_payload") or {}), FILE_HASHES: hashes},
+        }
+        try:
+            self.edit(ts, content, raw=raw, metadata=stamped, files=file_ids)
+        except Exception as e:
+            if not uploaded:
+                raise
+            deleted = _definitely_not_attached(e) and clean_up()
+            raise FileSwapError(uploaded, deleted) from e
+        swap = FilesSwap(file_ids=file_ids, uploaded=uploaded)
+        kept = set(file_ids)
+        for old, _ in unused:
+            if old in kept:
+                continue
+            try:
+                self.delete_file(old)
+                swap.deleted.append(old)
+            except Exception as e:
+                swap.undeleted.append((old, e))
+        return swap
+
     def replace_file(
         self,
         ts: str,
@@ -962,51 +1100,15 @@ class SlackClient:
         *,
         raw: bool | None = None,
         metadata: dict | None = None,
-        previous: Sequence[str] | None = None,
+        previous: Sequence[tuple[str, str | None]] | None = None,
         alt_text: str | None = None,
         title: str | None = None,
-    ) -> FileSwap:
-        """Swap the file attached to message ``ts`` (the hourly-card pattern):
-        upload ``data`` (waiting until Slack has processed it), edit the
-        message to ``content`` with only the new file attached, then delete
-        the files it had: ``previous``, or those read from the message (a
-        history scope).
-
-        No orphans: a replaced file is deleted only after the edit succeeded
-        (already gone is fine; other failures land in ``undeleted``). An edit
-        Slack definitely refused deletes the new upload; one that may have
-        landed (timeout, 5xx) keeps it. Either way it raises `FileSwapError`
-        with the upload's id.
-        """
-        if previous is None:
-            result = self._request("conversations.replies", {
-                "channel": self.channel, "ts": ts, "limit": 1,
-            }, method="GET")
-            msgs = result.get("messages") or []
-            files = msgs[0].get("files", []) if msgs and msgs[0].get("ts") == ts else []
-            previous = [f["id"] for f in files if isinstance(f.get("id"), str)]
-        file_id = self.upload(name, data, alt_text=alt_text, title=title)
-        try:
-            self.edit(ts, content, raw=raw, metadata=metadata, files=[file_id])
-        except Exception as e:
-            deleted = False
-            if _definitely_not_attached(e):
-                try:
-                    self.delete_file(file_id)
-                    deleted = True
-                except Exception:
-                    pass  # Reported via `deleted=False`.
-            raise FileSwapError(file_id, deleted) from e
-        swap = FileSwap(file_id=file_id)
-        for old in previous:
-            if old == file_id:
-                continue
-            try:
-                self.delete_file(old)
-                swap.deleted.append(old)
-            except Exception as e:
-                swap.undeleted.append((old, e))
-        return swap
+    ) -> FilesSwap:
+        """`replace_files` with one file (``.file_id`` is its id)."""
+        return self.replace_files(
+            ts, [FileSpec(name, data, title=title, alt_text=alt_text)], content,
+            raw=raw, metadata=metadata, previous=previous,
+        )
 
     def file_info(self, file_id: str) -> dict:
         """A file's ``files.info`` record (``mimetype``, ``name``, ``shares``, …)."""

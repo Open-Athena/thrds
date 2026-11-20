@@ -102,12 +102,13 @@ thrds slack permalink #foo 1783.1        # get workspace permalink URL
 | Where it sits | Below all blocks | Where you put it |
 | Swap | `edit(ts, …, files=[new])`, then delete the old file | A new URL (`{bust}`), or another uploaded file |
 
-`SlackClient.replace_file(ts, name, data, content)` does the hourly-card swap in one call:
-1. It uploads, waiting until Slack has processed the file.
-2. It edits with only the new file attached.
-3. It deletes the previous file, but only after the edit succeeded.
+`SlackClient.replace_files(ts, [(name, data), …], content)` does the hourly-card swap in one call, for one file or several (`replace_file` for one):
+1. It hashes each file. One whose bytes the message already has is reused, matched by the `thrds_files` hashes in its metadata. These are the same hashes the TS toolkit writes.
+2. It uploads the rest, waiting until Slack has processed them.
+3. It edits with exactly those files, in order.
+4. It deletes the files the message no longer has, but only after the edit succeeded.
 
-If the edit fails, the new upload is deleted when Slack definitely refused it, or kept when the write may have landed (`FileSwapError` carries its id).
+If an upload fails partway, this run's uploads are deleted. A failed edit deletes them when Slack definitely refused it, or keeps them when the write may have landed (`FileSwapError` carries their ids). On the phone, several attachments show as one horizontal row you swipe through, in list order, not a grid.
 
 The pieces:
 - `upload(name, data, processed=True)`: polls `files.info` every 0.5 s for up to 30 s until there's a `mimetype` and, for an image, thumbnails. The bytes POST retries a 5xx, a 429 or a timeout.

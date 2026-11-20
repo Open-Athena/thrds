@@ -7,13 +7,16 @@ from .mastodon import MastodonClient
 from .protocol import ThreadClient
 from .slack import (
     FileNotProcessedError,
-    FileSwap,
+    FILE_HASHES,
+    FileSpec,
     FileSwapError,
+    FilesSwap,
     FilesNotAttachedError,
     RecoveredSession,
     ScanCapReached,
     SlackApiError,
     SlackClient,
+    hash53_bytes,
     is_processed,
 )
 from .state import SessionState, StagingChrome, ThreadEntry, ThreadTarget
@@ -51,11 +54,14 @@ __all__ = [
     "SenderChangePolicy",
     "SessionState",
     "FileNotProcessedError",
-    "FileSwap",
+    "FILE_HASHES",
+    "FileSpec",
     "FileSwapError",
+    "FilesSwap",
     "FilesNotAttachedError",
     "SlackApiError",
     "SlackClient",
+    "hash53_bytes",
     "is_processed",
     "StagingChrome",
     "SyncOptions",

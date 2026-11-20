@@ -12,11 +12,13 @@ from urllib.error import HTTPError, URLError
 
 from thrds.slack import (
     FileNotProcessedError,
-    FileSwap,
+    FileSpec,
     FileSwapError,
+    FilesSwap,
     FilesNotAttachedError,
     SlackApiError,
     SlackClient,
+    hash53_bytes,
     is_processed,
 )
 
@@ -32,6 +34,8 @@ class _Files(SlackClient):
         fail_update: bool = False,
         update_error: Exception | None = None,
         live_files: list[str] = [],
+        live_hashes: list[str] | None = None,
+        fail_upload: str | None = None,
     ):
         super().__init__(token="xoxb-t", channel="C1")
         self._bot_ids = ("U1", "B1")
@@ -41,11 +45,17 @@ class _Files(SlackClient):
         self.fail_update = fail_update
         self.update_error = update_error
         self.live_files = live_files
+        self.live_hashes = live_hashes
+        self.fail_upload = fail_upload
+        self.n = 0
 
     def _request(self, endpoint, data=None, method="POST"):
         self.calls.append((endpoint, data, method))
         if endpoint == "files.getUploadURLExternal":
-            return {"ok": True, "upload_url": "https://files.slack.test/up/1", "file_id": "F1"}
+            if data["filename"] == self.fail_upload:
+                raise SlackApiError(endpoint, "invalid_name")
+            self.n += 1
+            return {"ok": True, "upload_url": f"https://files.slack.test/up/{self.n}", "file_id": f"F{self.n}"}
         if endpoint == "files.info":
             if self.unprocessed > 0:
                 self.unprocessed -= 1
@@ -58,7 +68,10 @@ class _Files(SlackClient):
         if endpoint == "chat.update" and self.update_error is not None:
             raise self.update_error
         if endpoint == "conversations.replies":
-            return {"ok": True, "messages": [{"ts": "1.0", "files": [{"id": f} for f in self.live_files]}]}
+            m: dict = {"ts": "1.0", "files": [{"id": f} for f in self.live_files]}
+            if self.live_hashes is not None:
+                m["metadata"] = {"event_type": "thrds", "event_payload": {"thrds_files": self.live_hashes}}
+            return {"ok": True, "messages": [m]}
         if endpoint == "chat.postMessage":
             return {"ok": True, "ts": "5.0"}
         return {"ok": True, "ts": (data or {}).get("ts")}
@@ -235,20 +248,63 @@ def test_post_with_files_whose_attach_fails_names_the_posted_ts():
     )
 
 
+def _stamp(*datas: bytes) -> dict:
+    return {"event_type": "thrds", "event_payload": {"thrds_files": [hash53_bytes(d) for d in datas]}}
+
+
+def test_hash53_bytes_matches_the_ts_toolkit():
+    # Reference values from TS `hash53Bytes` (src/hash.ts), so `thrds_files` dedupes across both.
+    assert [hash53_bytes(s.encode()) for s in ("", "a", "png-2", "héllo")] == [
+        "0bdcb81aee8d83", "1c2ba782c97901", "1b6bc876e8bb86", "07ff2cfafac5c0",
+    ]
+    assert hash53_bytes(bytes((i * 37) % 256 for i in range(1000))) == "0a479fabee104f"
+
+
 def test_replace_file_swaps_and_deletes_the_previous_only_after_the_edit(uploads):
     c = _Files(live_files=["F0"])
-    assert c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True) == FileSwap(file_id="F1", deleted=["F0"])
+    swap = c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True)
+    assert (swap, swap.file_id) == (FilesSwap(file_ids=["F1"], uploaded=["F1"], deleted=["F0"]), "F1")
     assert [(e, d) for e, d, _ in c.calls] == [
-        ("conversations.replies", {"channel": "C1", "ts": "1.0", "limit": 1}),
+        ("conversations.replies", {"channel": "C1", "ts": "1.0", "limit": 1, "include_all_metadata": True}),
         ("files.getUploadURLExternal", {"filename": "fleet.png", "length": "3"}),
         ("files.completeUploadExternal", {"files": [{"id": "F1"}]}),
         ("files.info", {"file": "F1"}),
         ("chat.update", {
             "channel": "C1", "ts": "1.0", "text": "card",
-            "unfurl_links": False, "unfurl_media": False, "file_ids": ["F1"],
+            "unfurl_links": False, "unfurl_media": False,
+            "metadata": _stamp(b"PNG"), "file_ids": ["F1"],
         }),
         ("files.delete", {"file": "F0"}),
     ]
+
+
+def test_replace_files_reuses_by_hash_keeps_order_and_deletes_dropped(uploads):
+    c = _Files(live_files=["Fa", "Fb", "Fc"], live_hashes=[hash53_bytes(x) for x in (b"a", b"b", b"c")])
+    swap = c.replace_files("1.0", [("c.png", b"c"), FileSpec("a.png", b"a"), ("b2.png", b"b2")], "card", raw=True)
+    assert swap == FilesSwap(file_ids=["Fc", "Fa", "F1"], uploaded=["F1"], deleted=["Fb"])
+    update = next(d for e, d, _ in c.calls if e == "chat.update")
+    assert (update["file_ids"], update["metadata"]) == (["Fc", "Fa", "F1"], _stamp(b"c", b"a", b"b2"))
+
+
+def test_replace_files_without_hashes_uploads_everything_and_merges_metadata(uploads):
+    c = _Files(live_files=["Fa"])
+    swap = c.replace_files(
+        "1.0", [("a.png", b"a")], "card", raw=True,
+        metadata={"event_type": "fleet", "event_payload": {"run": 7}},
+    )
+    update = next(d for e, d, _ in c.calls if e == "chat.update")
+    assert (swap, update["metadata"]) == (
+        FilesSwap(file_ids=["F1"], uploaded=["F1"], deleted=["Fa"]),
+        {"event_type": "fleet", "event_payload": {"run": 7, "thrds_files": [hash53_bytes(b"a")]}},
+    )
+
+
+def test_replace_files_upload_failing_partway_deletes_this_runs_uploads(uploads):
+    c = _Files(live_files=["F0"], fail_upload="c.png")
+    with pytest.raises(SlackApiError) as e:
+        c.replace_files("1.0", [("a.png", b"a"), ("b.png", b"b"), ("c.png", b"c")], "card", raw=True)
+    assert e.value.code == "invalid_name"
+    assert [d for ep, d, _ in c.calls if ep in ("files.delete", "chat.update")] == [{"file": "F1"}, {"file": "F2"}]
 
 
 @pytest.mark.parametrize("error, deleted, message", [
@@ -258,13 +314,24 @@ def test_replace_file_swaps_and_deletes_the_previous_only_after_the_edit(uploads
 def test_replace_file_failed_edit(uploads, error, deleted, message):
     c = _Files(update_error=error)
     with pytest.raises(FileSwapError) as e:
-        c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=["F0"])
-    assert (e.value.file_id, e.value.deleted, str(e.value), e.value.__cause__) == ("F1", deleted, message, error)
+        c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=[("F0", None)])
+    assert (e.value.file_ids, e.value.file_id, e.value.deleted, str(e.value), e.value.__cause__) == (
+        ["F1"], "F1", deleted, message, error,
+    )
     # The previous file is never touched; the new one is deleted only when Slack refused the edit.
     assert [d for ep, d, _ in c.calls if ep == "files.delete"] == ([{"file": "F1"}] if deleted else [])
 
 
+def test_replace_files_failed_edit_without_uploads_reraises(uploads):
+    error = SlackApiError("chat.update", "msg_too_long")
+    c = _Files(update_error=error, live_files=["Fa"], live_hashes=[hash53_bytes(b"a")])
+    with pytest.raises(SlackApiError) as e:
+        c.replace_files("1.0", [("a.png", b"a")], "card v2", raw=True)
+    assert e.value is error
+    assert [ep for ep, _, _ in c.calls] == ["conversations.replies", "chat.update"]
+
+
 def test_replace_file_reports_undeletable_previous_files(uploads):
     c = _Files(delete_error="cant_delete_file")
-    swap = c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=["F0"])
-    assert (swap.file_id, swap.deleted, [(i, e.code) for i, e in swap.undeleted]) == ("F1", [], [("F0", "cant_delete_file")])
+    swap = c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=[("F0", None)])
+    assert (swap.file_ids, swap.deleted, [(i, e.code) for i, e in swap.undeleted]) == (["F1"], [], [("F0", "cant_delete_file")])
