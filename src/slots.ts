@@ -293,8 +293,11 @@ export async function syncSlots(
         }
       }
       if (found) {
-        if (slot === null) state.parent = { ts: found.id, hash };
-        else state.slots[slot] = { ts: found.id, hash };
+        // Record what's live: a post with files lands stamped without them if the attaching edit didn't.
+        const stamped = found.metadata?.event_payload?.[THRDS_HASH];
+        const live = typeof stamped === "string" ? stamped : hash;
+        if (slot === null) state.parent = { ts: found.id, hash: live };
+        else state.slots[slot] = { ts: found.id, hash: live };
         actions.push({ type: "ADOPT", slot, ts: found.id });
       }
       delete state.pending;

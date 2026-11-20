@@ -115,6 +115,41 @@ export function webClientTransport(client: {
   };
 }
 
+/**
+ * A post with `files` landed (`ts`), but the edit attaching them failed. The message is stamped without the files, so
+ * `sync` / `syncSlots` see it as out of date and attach them on their next run.
+ */
+export class FilesNotAttachedError extends Error {
+  constructor(
+    public readonly ts: string,
+    options?: { cause?: unknown },
+  ) {
+    super(`posted ${ts}, but attaching its files failed`, options);
+    this.name = "FilesNotAttachedError";
+  }
+}
+
+/** What `upload` sends: bytes, or a string as UTF-8. */
+export type UploadData = Uint8Array | ArrayBuffer | Blob | string;
+
+export interface UploadOptions {
+  /** Share the file into this channel, which posts a file message. Unshared by default. */
+  channel?: string;
+  /** With `channel`: the shared file message's text. */
+  initialComment?: string;
+  /** With `channel`: share it as a reply in this thread. */
+  threadTs?: string;
+  /** Default: the file name. */
+  title?: string;
+  altText?: string;
+  /**
+   * Return only once Slack has processed the file (`files.info` reports its `mimetype`). An `image` block that points
+   * at the file (`slack_file: {id}`) fails with `invalid_blocks` until then; attaching it with `files` doesn't need
+   * this. `true` polls every second for up to 30 s. Throws a `timeout` `SlackApiError` when time runs out.
+   */
+  processed?: boolean | { timeoutMs?: number; intervalMs?: number };
+}
+
 export interface SlackPostOptions {
   threadId?: string;
 }
@@ -504,10 +539,15 @@ export class SlackClient implements ThreadClient {
     return key === msg.text ? { id, content: msg.text } : { id, content: msg.text, key };
   }
 
-  /** Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. */
+  /**
+   * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
+   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+   */
   async post(m: MsgLike, threadId?: string): Promise<Message> {
     const msg = toMsg(m);
-    const data = this.body(msg);
+    const { files, ...bare } = msg;
+    const attach = files !== undefined && files.length > 0;
+    const data = this.body(attach ? bare : msg);
     const username = msg.username ?? this.username;
     const iconUrl = msg.iconUrl ?? this.iconUrl;
     const iconEmoji = msg.iconEmoji ?? this.iconEmoji;
@@ -522,17 +562,92 @@ export class SlackClient implements ThreadClient {
     const ts = result["ts"];
     // Recording a missing ts would make the next run post again.
     if (typeof ts !== "string" || !ts) throw new SlackApiError("chat.postMessage", "invalid_response", 200, result, undefined, "http");
+    if (attach) {
+      try {
+        return await this.edit(ts, msg);
+      } catch (e) {
+        throw new FilesNotAttachedError(ts, { cause: e });
+      }
+    }
     return this.sent(ts, msg);
   }
 
   /**
-   * Edit a message's text, blocks, attachments and metadata. Slack ignores sender fields on an edit. To clear blocks
-   * or attachments, pass `[]`; omitting them leaves them as they were. For Slack's raw reply (`message`), call
-   * `api("chat.update", …)` directly.
+   * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
+   * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
+   * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
    */
   async edit(messageId: string, m: MsgLike): Promise<Message> {
-    await this.api("chat.update", { ...this.body(m), ts: messageId });
-    return this.sent(messageId, m);
+    const msg = toMsg(m);
+    const data: Record<string, unknown> = { ...this.body(msg), ts: messageId };
+    if (msg.files !== undefined) data["file_ids"] = msg.files;
+    await this.api("chat.update", data);
+    return this.sent(messageId, msg);
+  }
+
+  /**
+   * Upload a file (`files.getUploadURLExternal`, the bytes, `files.completeUploadExternal`); returns its id. Unshared
+   * unless `channel` is given: attach it to a message with `Msg.files`, or reference it from an `image` block.
+   */
+  async upload(name: string, data: UploadData, options: UploadOptions = {}): Promise<string> {
+    const bytes =
+      typeof data === "string"
+        ? new TextEncoder().encode(data)
+        : data instanceof Blob
+          ? new Uint8Array(await data.arrayBuffer())
+          : data instanceof ArrayBuffer
+            ? new Uint8Array(data)
+            : data;
+    const request: Record<string, unknown> = { filename: name, length: bytes.byteLength };
+    if (options.altText !== undefined) request["alt_txt"] = options.altText;
+    const target = await this.api("files.getUploadURLExternal", request, { form: true });
+    const id = target["file_id"] as string;
+    const { fetch: fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = this.options;
+    let response: Response;
+    try {
+      response = await fetchImpl(target["upload_url"] as string, {
+        method: "POST",
+        body: bytes as Uint8Array<ArrayBuffer>,
+        ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+      });
+    } catch (e) {
+      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new SlackApiError("upload_url", "timeout", 0);
+      throw new SlackApiError("upload_url", "transport_error", 0, undefined, undefined, "transport", { cause: e });
+    }
+    await response.text();
+    if (!response.ok) throw new SlackApiError("upload_url", `http_${response.status}`, response.status);
+    const done: Record<string, unknown> = { files: [{ id, title: options.title ?? name }] };
+    if (options.channel !== undefined) {
+      done["channel_id"] = options.channel;
+      if (options.initialComment !== undefined) done["initial_comment"] = options.initialComment;
+      if (options.threadTs !== undefined) done["thread_ts"] = options.threadTs;
+    }
+    await this.api("files.completeUploadExternal", done);
+    if (options.processed) {
+      const { timeoutMs: limit = 30_000, intervalMs = 1000 } = options.processed === true ? {} : options.processed;
+      const start = this.now();
+      for (;;) {
+        const file = await this.fileInfo(id);
+        if (file["mimetype"]) break;
+        if (this.now() - start + intervalMs > limit) throw new SlackApiError("files.info", "timeout", 0, file);
+        await (this.options.sleep ?? sleep)(intervalMs);
+      }
+    }
+    return id;
+  }
+
+  /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */
+  async fileInfo(id: string): Promise<Record<string, unknown>> {
+    return (await this.api("files.info", { file: id }, { get: true }))["file"] as Record<string, unknown>;
+  }
+
+  /** Delete a file (`files.delete`), e.g. the one an edit just replaced. A file that's already gone is fine. */
+  async deleteFile(id: string): Promise<void> {
+    try {
+      await this.api("files.delete", { file: id }, { form: true });
+    } catch (e) {
+      if (!(e instanceof SlackApiError && (e.code === "file_not_found" || e.code === "file_deleted"))) throw e;
+    }
   }
 
   /**

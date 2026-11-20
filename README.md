@@ -85,6 +85,27 @@ await slack.post({ text: "Ann submitted their update", blocks: [section("*Did:* 
 
 Senders are fixed when a message is posted: `chat.update` ignores `username` / `icon_url`, so an edit keeps the original sender. `delete` refuses to orphan thread replies; that check needs a history scope on the deleting token.
 
+### Files
+
+```ts
+// An hourly card whose image phone users can download: swap the attached file in place, then drop the old one.
+const file = await slack.upload("fleet.png", png);
+const prev = (await slack.message(ts))?.files?.[0]?.["id"] as string | undefined;
+await slack.edit(ts, { text: "Fleet status", blocks, files: [file] });
+if (prev) await slack.deleteFile(prev);
+```
+
+- `upload(name, bytes | string | Blob, opts)` → file id. Unshared unless `opts.channel` (with `initialComment`, `threadTs`), which posts a file message. `opts.processed` waits until Slack has processed the file (default: poll every 1 s, up to 30 s).
+- `Msg.files`: file ids attached below the message, sent as `chat.update` `file_ids`. On an edit, they replace the message's files. Omitting `files` leaves them as they were, and `[]` detaches them; a detached file still exists until `deleteFile`. `chat.postMessage` takes no `file_ids`, so `post` with files posts first, then attaches them with an edit. If that edit fails it throws `FilesNotAttachedError` (with the `ts`), and the message stays stamped without the files, so `sync` / `upsert` attach them on their next run. Files count toward the content hash.
+- `deleteFile(id)` (`files.delete`): a file that's already gone is fine. `fileInfo(id)` (`files.info`).
+- Scopes: `files:write`; `files:read` for `fileInfo` / `processed`.
+
+What Slack does (tested by disky in a DM, 2026-11; [spec][file-replace]):
+- Every edit kept the message in place: same `ts`, marked `(edited)`, no new notification.
+- **Only an attached file offers Download / Save on Slack's phone apps.** An `image` block doesn't, whether it points at a URL or at an uploaded file (`slack_file: {id}` or `{url}`).
+- Swapping `file_ids` replaces the attached file. That works on a file message and on a plain blocks message, where the file shows below the blocks. Deleting the replaced file afterwards leaves the new one showing.
+- An `image` block on an uploaded file fails with `invalid_blocks` until Slack has processed the upload (`files.info` `mimetype` is `""` until then). Upload with `processed: true` first.
+
 ### Declarative sync
 
 ```ts
@@ -249,3 +270,4 @@ CI on tag `ts-vX.Y.Z` publishes to npm via [OIDC trusted publishing][npm-tp], so
 [toolkit-spec]: https://github.com/Open-Athena/thrds/blob/ts/specs/done/slack-toolkit-reuse.md
 [npm-tp]: https://docs.npmjs.com/trusted-publishers
 [ts-dist]: https://github.com/Open-Athena/thrds/tree/ts-dist
+[file-replace]: https://github.com/Open-Athena/thrds/blob/ts/specs/done/slack-file-replace.md

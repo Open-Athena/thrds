@@ -36,9 +36,12 @@ export type {
   SlackPostOptions,
   SlackSyncOptions,
   SlackUser,
+  UploadData,
+  UploadOptions,
 } from "./slack";
 export {
   CHANNEL_TTL_MS,
+  FilesNotAttachedError,
   MAX_CACHED_USERS,
   NOT_FOUND_TTL_MS,
   SLACK_MESSAGE_LIMIT,

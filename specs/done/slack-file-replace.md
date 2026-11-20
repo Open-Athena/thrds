@@ -24,6 +24,31 @@ So the only way to give phone users Download on an edited-in-place message is an
 
 disky's fleet post (`fleet/functions/_lib/slack.ts`, a Worker) calls the Web API directly today. If Ryan approves switching the card to an attached file, it will do upload, edit with `file_ids`, then delete the previous file each hour. It can move onto these helpers once they're published.
 
+## Follow-up run (scenario 3, 2026-11-20)
+
+disky ran `tmp/slack_file_experiment.py 3` for the two behaviors the helpers rely on:
+- An edit of text and blocks **without** `file_ids` keeps the attached file.
+- `file_ids: []` detaches it. The file itself survives (`files.info` ok) until `files.delete`.
+
+## What landed (TS, `ts`)
+
+- `upload(name, data, opts)` → file id (`src/slack.ts`). It's unshared unless `opts.channel` (`initialComment`, `threadTs`) is given. `opts.processed` polls `files.info` until `mimetype` is set (default every 1 s for up to 30 s) and throws a `timeout` `SlackApiError` past that. The upload POST uses the client's `fetch` and `timeoutMs`; errors name the method `upload_url`.
+- `Msg.files: string[]` goes out as `chat.update` `file_ids`. Omitted leaves the files alone; `[]` detaches. Files count toward `msgHash` and make a message rich.
+- `post` with files: `chat.postMessage` takes no `file_ids`, so it posts stamped *without* the files, then `edit`s them on. If that edit fails it throws `FilesNotAttachedError` (`ts`, `cause`). It isn't a `SlackApiError`, so `syncSlots` keeps `pending`.
+- `syncSlots` adoption now records the hash stamped on the live message rather than the pending one. Without that, a post whose attach failed would be adopted as up to date and never get its files.
+- `deleteFile(id)` tolerates `file_not_found` / `file_deleted`; `fileInfo(id)`.
+- `/testing`:
+  - `fakeSlack` decodes form-encoded bodies, and treats a request to any non-`/api/` path as method `upload_url` (with `bytes`).
+  - `fakeChannel` handles the upload flow, sharing (a file message), `files.info` (`processedAfter` reads before `mimetype` is set), `files.delete`, and `chat.update` `file_ids`. It returns `files`.
+- README: a "Files" section with the results above.
+- Tests: `tests/files.test.ts`.
+
+Not covered: what Slack shows when a file that's still attached gets deleted (the fake leaves the message's file entry alone).
+
+## Python parity
+
+Pending: `SlackClient.upload`, `edit(files=)`, `delete_file` on `py`.
+
 ## Leftovers in the test DM
 
 Files from the runs: A (deleted), B, C and D (two of each: the first scenario-2 run failed), E (deleted) and F. Delete them when convenient, or leave them; they're small solid-colour PNGs.

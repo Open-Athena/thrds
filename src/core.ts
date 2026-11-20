@@ -55,6 +55,13 @@ export interface Msg extends Sender {
   /** Legacy attachments (colored side bars, cards). `[]` clears them on an edit. */
   attachments?: unknown[];
   metadata?: MessageMetadata;
+  /**
+   * Uploaded file ids (`SlackClient.upload`) attached below the message, sent as `chat.update` `file_ids`: an edit
+   * replaces the message's attached files with these, and omitting it leaves them as they were. `chat.postMessage`
+   * takes no `file_ids`, so a post with files is a post followed by an edit. On Slack's phone apps only an attached file
+   * offers Download / Save; an `image` block doesn't, even one on a Slack-hosted file.
+   */
+  files?: string[];
   /** Also show a thread reply in the channel. Applies at post time. */
   replyBroadcast?: boolean;
   /** Overrides the client's unfurl setting for this message. */
@@ -73,7 +80,7 @@ export const toMsg = (m: MsgLike): Msg => (typeof m === "string" ? { text: m } :
 /** The `metadata.event_payload` field a sent message's content hash is stamped into. */
 export const THRDS_HASH = "thrds_hash";
 
-/** Hash of what a re-send can change: text, blocks and metadata (not the sender, which Slack fixes at post). */
+/** Hash of what a re-send can change: text, blocks, attachments, files and metadata (not the sender, fixed at post). */
 export function msgHash(m: MsgLike): string {
   const msg = toMsg(m);
   const payload = msg.metadata ? { ...msg.metadata.event_payload } : undefined;
@@ -83,14 +90,16 @@ export function msgHash(m: MsgLike): string {
       text: msg.text,
       blocks: msg.blocks,
       attachments: msg.attachments,
+      files: msg.files,
       metadata: msg.metadata ? { event_type: msg.metadata.event_type, event_payload: payload } : undefined,
     }),
   );
 }
 
-/** Whether `m` is compared by a stamped hash rather than its text (it has blocks, attachments or metadata). */
+/** Whether `m` is compared by a stamped hash rather than its text (it has blocks, attachments, files or metadata). */
 export const isRich = (m: MsgLike): boolean =>
-  typeof m !== "string" && (m.blocks !== undefined || m.attachments !== undefined || m.metadata !== undefined);
+  typeof m !== "string" &&
+  (m.blocks !== undefined || m.attachments !== undefined || m.files !== undefined || m.metadata !== undefined);
 
 /**
  * How `sync` compares a desired message with a live one. Plain text compares as itself (so threads written by the
