@@ -39,6 +39,8 @@ class _FakeSlack(SlackClient):
                     "file_id": f"F{self._n}"}
         if endpoint == "files.completeUploadExternal":
             return {"ok": True}
+        if endpoint == "files.info":
+            return {"ok": True, "file": {"id": data["file"], "mimetype": "image/png"}}
         if endpoint == "chat.postMessage":
             self._n += 1
             return {"ts": f"{self._n}.000", "channel": "C_TARGET"}
@@ -77,11 +79,13 @@ def test_path_image_uploads_and_builds_slack_file_block(fake, tmp_path):
     png.write_bytes(PNG)
     fake.post("August usage", images=[Image(path=png, alt="usage")])
 
-    # Three-step upload happened, in order, before the post.
+    # Three-step upload, then a wait for Slack to process the file (a
+    # `slack_file` block on an unprocessed file is `invalid_blocks`), then the post.
     endpoints = [c[0] for c in fake.calls]
     assert endpoints == [
         "files.getUploadURLExternal",
         "files.completeUploadExternal",
+        "files.info",
         "chat.postMessage",
     ]
     assert fake.calls[0][1] == {"filename": "plot.png", "length": str(len(PNG))}

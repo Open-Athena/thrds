@@ -122,6 +122,15 @@ def _slack_icon_url(msg: dict) -> str | None:
     return None
 
 
+class SlackApiError(RuntimeError):
+    """A Slack Web API call that failed: ``code`` is Slack's error string
+    (``file_not_found``, ``channel_not_found``, …) or ``http_<status>``."""
+    def __init__(self, endpoint: str, code: str, message: str | None = None):
+        super().__init__(message or f"Slack API error: {code}")
+        self.endpoint = endpoint
+        self.code = code
+
+
 class ScanCapReached(RuntimeError):
     """Raised by ``scan_thrds_metadata`` when ``max_pages`` is exhausted
     before ``has_more`` clears.
@@ -262,9 +271,16 @@ class SlackClient:
                     retry_after = int(e.headers.get("Retry-After", 1))
                     time.sleep(retry_after)
                     continue
-                raise RuntimeError(f"Slack API error: {e.code} {e.read().decode()}") from e
+                raise SlackApiError(
+                    endpoint, f"http_{e.code}", f"Slack API error: {e.code} {e.read().decode()}",
+                ) from e
         if not result.get("ok"):
-            raise RuntimeError(f"Slack API error: {result.get('error', result)}")
+            error = result.get("error")
+            raise SlackApiError(
+                endpoint,
+                error if isinstance(error, str) else "unknown_error",
+                f"Slack API error: {result.get('error', result)}",
+            )
         return result
 
     def _metadata_for(self, content: str) -> dict | None:
@@ -628,6 +644,7 @@ class SlackClient:
         images: Sequence[Image] = (),
         raw: bool | None = None,
         metadata: dict | None = None,
+        files: Sequence[str] | None = None,
     ) -> Message:
         """Edit ``message_id``'s text to ``content``.
 
@@ -641,6 +658,13 @@ class SlackClient:
 
         ``metadata`` mirrors `post()`: sent with the update (Slack keeps a
         message's existing metadata when an update omits it).
+
+        ``files`` are uploaded file ids (`upload`) attached below the message,
+        sent as ``file_ids``: they replace its attached files. ``None`` leaves
+        them as they were and ``[]`` detaches them; a detached file still
+        exists until `delete_file`. Only an attached file offers Download /
+        Save on Slack's phone apps (an image block doesn't). See the TS
+        branch's `specs/done/slack-file-replace.md`.
         """
         content = self._fold_images_into_content(content, images)
         if len(content) > SLACK_MESSAGE_LIMIT:
@@ -668,6 +692,8 @@ class SlackClient:
         md = metadata if metadata is not None else self._metadata_for(content)
         if md is not None:
             data["metadata"] = md
+        if files is not None:
+            data["file_ids"] = list(files)
         self._request("chat.update", data)
         return Message(id=message_id, content=content)
 
@@ -740,24 +766,85 @@ class SlackClient:
         extra = "\n\n".join(lines)
         return f"{content}\n\n{extra}" if content else extra
 
+    def upload(
+        self,
+        name: str,
+        data: bytes | str,
+        *,
+        channel: str | None = None,
+        initial_comment: str | None = None,
+        thread_ts: str | None = None,
+        title: str | None = None,
+        alt_text: str | None = None,
+        processed: bool | float = False,
+        poll_interval: float = 1.0,
+    ) -> str:
+        """Upload a file (``files.getUploadURLExternal``, the bytes,
+        ``files.completeUploadExternal``) and return its id. A ``str`` is sent
+        as UTF-8.
+
+        Unshared unless ``channel`` is given (with ``initial_comment`` /
+        ``thread_ts``), which posts a file message. Attach an unshared file to
+        a message with ``edit(..., files=[id])``, or reference it from an
+        ``image`` block (``slack_file: {id}``).
+
+        ``processed`` waits until Slack has processed the file (``files.info``
+        reports a ``mimetype``): an image block on it fails with
+        ``invalid_blocks`` until then. ``True`` waits up to 30 s; a number is
+        the timeout in seconds. Raises ``SlackApiError`` (code ``timeout``)
+        when time runs out.
+        """
+        body = data.encode() if isinstance(data, str) else data
+        request = {"filename": name, "length": str(len(body))}
+        if alt_text is not None:
+            request["alt_txt"] = alt_text
+        up = self._request("files.getUploadURLExternal", request, method="GET")
+        file_id = up["file_id"]
+        req = urllib.request.Request(up["upload_url"], data=body, method="POST")
+        try:
+            with urllib.request.urlopen(req) as resp:
+                resp.read()
+        except HTTPError as e:
+            raise SlackApiError("upload_url", f"http_{e.code}") from e
+        entry = {"id": file_id}
+        if title is not None:
+            entry["title"] = title
+        done: dict = {"files": [entry]}
+        if channel is not None:
+            done["channel_id"] = channel
+            if initial_comment is not None:
+                done["initial_comment"] = initial_comment
+            if thread_ts is not None:
+                done["thread_ts"] = thread_ts
+        self._request("files.completeUploadExternal", done)
+        if processed:
+            timeout = 30.0 if processed is True else float(processed)
+            deadline = time.monotonic() + timeout
+            while not self.file_info(file_id).get("mimetype"):
+                if time.monotonic() + poll_interval > deadline:
+                    raise SlackApiError("files.info", "timeout", f"Slack file {file_id} not processed after {timeout:g}s")
+                time.sleep(poll_interval)
+        return file_id
+
+    def file_info(self, file_id: str) -> dict:
+        """A file's ``files.info`` record (``mimetype``, ``name``, ``shares``, …)."""
+        return self._request("files.info", {"file": file_id}, method="GET")["file"]
+
+    def delete_file(self, file_id: str) -> None:
+        """Delete a file (``files.delete``), e.g. the one an edit just
+        replaced. A file that's already gone is fine."""
+        try:
+            self._request("files.delete", {"file": file_id})
+        except SlackApiError as e:
+            if e.code not in ("file_not_found", "file_deleted"):
+                raise
+
     def _upload_file(self, path: Path) -> str:
-        """Upload ``path`` to Slack and return its ``file_id`` (three-step
-        external-upload flow). The file is created workspace-side owned by the
-        bot, not posted to any channel — an image block surfaces it by id."""
-        data = path.read_bytes()
-        up = self._request(
-            "files.getUploadURLExternal",
-            {"filename": path.name, "length": str(len(data))},
-            method="GET",
-        )
-        req = urllib.request.Request(up["upload_url"], data=data, method="POST")
-        with urllib.request.urlopen(req) as resp:
-            resp.read()
-        self._request(
-            "files.completeUploadExternal",
-            {"files": [{"id": up["file_id"]}]},
-        )
-        return up["file_id"]
+        """Upload ``path`` to Slack and return its ``file_id``. The file is
+        created workspace-side owned by the bot, not posted to any channel: an
+        image block surfaces it by id, so this waits until Slack has processed
+        it (before that, a ``slack_file`` block fails with ``invalid_blocks``)."""
+        return self.upload(path.name, path.read_bytes(), processed=True)
 
     def _upload_cached(self, sha: str, path: str) -> str:
         """`file_id` for image ``sha`` at ``path``, uploading once per push."""
