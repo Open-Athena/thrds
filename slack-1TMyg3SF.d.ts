@@ -1,4 +1,4 @@
-import { h as ThreadClient, S as Sender, U as Unfurl, M as Message, b as MessageMetadata, d as MsgLike, g as Thread, e as SyncOptions, f as SyncResult } from './core-mTIXjUC4.js';
+import { h as ThreadClient, S as Sender, U as Unfurl, M as Message, b as MessageMetadata, d as MsgLike, g as Thread, e as SyncOptions, f as SyncResult } from './core-BNb_OG-w.js';
 
 /**
  * Slack Web API transport: one place for the `Bearer` + JSON/query request, the `ok` check, retries and timeouts that
@@ -190,6 +190,38 @@ type Transport = (token: string, method: string, body: Record<string, unknown>, 
 declare function webClientTransport(client: {
     apiCall(method: string, options?: Record<string, unknown>): Promise<Record<string, unknown>>;
 }): Transport;
+/**
+ * A post with `files` landed (`ts`), but the edit attaching them failed. The message is stamped without the files, so
+ * `sync` / `syncSlots` see it as out of date and attach them on their next run.
+ */
+declare class FilesNotAttachedError extends Error {
+    readonly ts: string;
+    constructor(ts: string, options?: {
+        cause?: unknown;
+    });
+}
+/** What `upload` sends: bytes, or a string as UTF-8. */
+type UploadData = Uint8Array | ArrayBuffer | Blob | string;
+interface UploadOptions {
+    /** Share the file into this channel, which posts a file message. Unshared by default. */
+    channel?: string;
+    /** With `channel`: the shared file message's text. */
+    initialComment?: string;
+    /** With `channel`: share it as a reply in this thread. */
+    threadTs?: string;
+    /** Default: the file name. */
+    title?: string;
+    altText?: string;
+    /**
+     * Return only once Slack has processed the file (`files.info` reports its `mimetype`). An `image` block that points
+     * at the file (`slack_file: {id}`) fails with `invalid_blocks` until then; attaching it with `files` doesn't need
+     * this. `true` polls every second for up to 30 s. Throws a `timeout` `SlackApiError` when time runs out.
+     */
+    processed?: boolean | {
+        timeoutMs?: number;
+        intervalMs?: number;
+    };
+}
 interface SlackPostOptions {
     threadId?: string;
 }
@@ -338,14 +370,26 @@ declare class SlackClient implements ThreadClient {
     /** The request body a message sends: text, blocks, attachments, metadata (hash-stamped when rich), flags. */
     private body;
     private sent;
-    /** Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. */
+    /**
+     * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
+     * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+     */
     post(m: MsgLike, threadId?: string): Promise<Message>;
     /**
-     * Edit a message's text, blocks, attachments and metadata. Slack ignores sender fields on an edit. To clear blocks
-     * or attachments, pass `[]`; omitting them leaves them as they were. For Slack's raw reply (`message`), call
-     * `api("chat.update", …)` directly.
+     * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
+     * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
+     * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
      */
     edit(messageId: string, m: MsgLike): Promise<Message>;
+    /**
+     * Upload a file (`files.getUploadURLExternal`, the bytes, `files.completeUploadExternal`); returns its id. Unshared
+     * unless `channel` is given: attach it to a message with `Msg.files`, or reference it from an `image` block.
+     */
+    upload(name: string, data: UploadData, options?: UploadOptions): Promise<string>;
+    /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */
+    fileInfo(id: string): Promise<Record<string, unknown>>;
+    /** Delete a file (`files.delete`), e.g. the one an edit just replaced. A file that's already gone is fine. */
+    deleteFile(id: string): Promise<void>;
     /**
      * One message by ts, read cheaply (`conversations.replies`, `limit: 1`): a thread parent or top-level message, with
      * its reactions and reply count. Null if it's gone.
@@ -435,4 +479,4 @@ declare class SlackClient implements ThreadClient {
     }): Promise<LinkedSyncResult>;
 }
 
-export { type Auth as A, type BulletFn as B, CHANNEL_TTL_MS as C, webClientTransport as D, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, type CallOptions as a, type LinkedThread as b, NOT_FOUND_TTL_MS as c, type RetryInfo as d, SLACK_MESSAGE_LIMIT as e, type Section as f, SlackApiError as g, SlackClient as h, type SlackClientOptions as i, type SlackDeleteOptions as j, type SlackErrorKind as k, type SlackMessage as l, type SlackPostOptions as m, type SlackResponse as n, type SlackSyncOptions as o, type SlackUser as p, type TransportOptions as q, USER_TTL_MS as r, buildDetailMessages as s, buildSummaryMessages as t, collect as u, defaultBullet as v, paginate as w, slackApi as x, slackCall as y, splitBody as z };
+export { type Auth as A, type BulletFn as B, CHANNEL_TTL_MS as C, slackCall as D, splitBody as E, FilesNotAttachedError as F, webClientTransport as G, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, type CallOptions as a, type LinkedThread as b, NOT_FOUND_TTL_MS as c, type RetryInfo as d, SLACK_MESSAGE_LIMIT as e, type Section as f, SlackApiError as g, SlackClient as h, type SlackClientOptions as i, type SlackDeleteOptions as j, type SlackErrorKind as k, type SlackMessage as l, type SlackPostOptions as m, type SlackResponse as n, type SlackSyncOptions as o, type SlackUser as p, type TransportOptions as q, USER_TTL_MS as r, type UploadData as s, type UploadOptions as t, buildDetailMessages as u, buildSummaryMessages as v, collect as w, defaultBullet as x, paginate as y, slackApi as z };

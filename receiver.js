@@ -1,6 +1,6 @@
 import {
   toMsg
-} from "./chunk-ZJWW4GA7.js";
+} from "./chunk-D6SVSKFD.js";
 import "./chunk-YSTFV535.js";
 
 // src/receiver.ts

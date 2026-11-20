@@ -1,4 +1,4 @@
-import { d as MsgLike } from './core-mTIXjUC4.js';
+import { d as MsgLike } from './core-BNb_OG-w.js';
 
 /**
  * `@open-athena/thrds/receiver`: the inbound half of a Slack app (Events API, interactivity, slash commands), on Web

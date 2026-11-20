@@ -1,5 +1,5 @@
-import { i as SlackClientOptions, h as SlackClient } from './slack-_HD6P5rZ.js';
-import './core-mTIXjUC4.js';
+import { i as SlackClientOptions, h as SlackClient } from './slack-1TMyg3SF.js';
+import './core-BNb_OG-w.js';
 
 /**
  * `@open-athena/thrds/testing`: fakes for testing Slack code without a network: a recording `fetch` for
@@ -11,8 +11,10 @@ import './core-mTIXjUC4.js';
 interface Call {
     method: string;
     http: string;
-    /** Parsed JSON body (POST) or query parameters (GET). */
+    /** Parsed JSON or form body (POST), or query parameters (GET and upload POSTs). */
     body: Record<string, unknown>;
+    /** The bytes of a file upload (a POST to an upload URL, whose method is `upload_url`). */
+    bytes?: Uint8Array;
 }
 interface Reply {
     status?: number;
@@ -21,7 +23,10 @@ interface Reply {
 }
 /** A route: one reply for every call, a queue (one per call, in order), or a function of the call. */
 type Route = Reply | Reply[] | ((call: Call) => Reply);
-/** A fake `fetch` for slack.com/api: replies per method, every call recorded (method, HTTP verb, body). */
+/**
+ * A fake `fetch` for slack.com/api: replies per method, every call recorded (method, HTTP verb, body). A request to
+ * any other path (a file's upload URL) is method `upload_url`.
+ */
 declare function fakeSlack(routes: Record<string, Route>): {
     fetch: typeof fetch;
     calls: Call[];
@@ -57,24 +62,45 @@ interface FakeMessage {
         event_type: string;
         event_payload: Record<string, unknown>;
     };
+    /** Attached files, as Slack lists them on a message (here just `id` and `name`). */
+    files?: Array<{
+        id: string;
+        name: string;
+    }>;
+}
+/** An uploaded file in a `fakeChannel`. */
+interface FakeFile {
+    id: string;
+    name: string;
+    title: string;
+    /** Empty until the file is "processed": `processedAfter` `files.info` reads (default 0). */
+    mimetype: string;
+    bytes?: Uint8Array;
+    /** The channel it was shared into, if any. */
+    channel?: string;
 }
 /**
- * A stateful fake channel: `chat.postMessage` / `update` / `delete`, `conversations.replies` / `history`, and
- * `auth.test`, behaving like Slack (ts assignment, threads, metadata, `message_not_found`). `writes` lists every write.
+ * A stateful fake channel: `chat.postMessage` / `update` / `delete`, `conversations.replies` / `history`, file
+ * uploads (`files.getUploadURLExternal`, the upload, `files.completeUploadExternal`, `files.info`, `files.delete`,
+ * `chat.update` `file_ids`) and `auth.test`, behaving like Slack (ts assignment, threads, metadata, `message_not_found`,
+ * a sharing upload posting a file message). `writes` lists every write; `files` holds the uploads.
  */
 declare function fakeChannel(options?: {
     messages?: FakeMessage[];
     /** Runs first for every call: return a reply to answer it, throw to fail it, or undefined for normal handling. */
     intercept?: (call: Call, messages: FakeMessage[]) => Reply | undefined;
     clientOptions?: Partial<SlackClientOptions>;
+    /** How many `files.info` reads report an upload unprocessed (`mimetype: ""`) before it's ready. Default 0. */
+    processedAfter?: number;
 }): {
     client: SlackClient;
     calls: Call[];
     messages: FakeMessage[];
+    files: Map<string, FakeFile>;
     writes: [string, string][];
     routes: Record<string, Route>;
 };
 /** An error a fake `fetch` can throw to look like a request that timed out. */
 declare const timeoutError: () => Error;
 
-export { AUTH, type Call, type FakeMessage, type Reply, type Route, fakeChannel, fakeClient, fakeSlack, fakeSleep, timeoutError };
+export { AUTH, type Call, type FakeFile, type FakeMessage, type Reply, type Route, fakeChannel, fakeClient, fakeSlack, fakeSleep, timeoutError };

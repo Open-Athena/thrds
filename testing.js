@@ -1,7 +1,7 @@
 import {
   SlackClient
-} from "./chunk-LITWYH3J.js";
-import "./chunk-ZJWW4GA7.js";
+} from "./chunk-QDYRCO3N.js";
+import "./chunk-D6SVSKFD.js";
 import "./chunk-YSTFV535.js";
 
 // src/testing.ts
@@ -10,10 +10,12 @@ function fakeSlack(routes) {
   const queues = /* @__PURE__ */ new Map();
   const fetchImpl = (async (input, init = {}) => {
     const url = new URL(String(input));
-    const method = url.pathname.replace(/^\/api\//, "");
+    const method = url.pathname.startsWith("/api/") ? url.pathname.slice("/api/".length) : "upload_url";
     const http = init.method ?? "GET";
-    const body = typeof init.body === "string" ? JSON.parse(init.body) : Object.fromEntries(url.searchParams);
+    const form = new Headers(init.headers).get("Content-Type")?.startsWith("application/x-www-form-urlencoded");
+    const body = typeof init.body === "string" ? form ? Object.fromEntries(new URLSearchParams(init.body)) : JSON.parse(init.body) : Object.fromEntries(url.searchParams);
     const call = { method, http, body };
+    if (init.body instanceof Uint8Array) call.bytes = init.body;
     calls.push(call);
     const route = routes[method];
     if (route === void 0) throw new Error(`unexpected Slack method: ${method}`);
@@ -43,7 +45,10 @@ function fakeClient(routes, options = {}) {
 }
 function fakeChannel(options = {}) {
   const messages = [...options.messages ?? []];
+  const files = /* @__PURE__ */ new Map();
+  const infoReads = /* @__PURE__ */ new Map();
   let n = 100;
+  let f = 100;
   const writes = [];
   const err = (error) => ({ body: { ok: false, error } });
   const routes = {
@@ -66,6 +71,13 @@ function fakeChannel(options = {}) {
       m.text = body["text"];
       if (body["blocks"]) m.blocks = body["blocks"];
       if (body["metadata"]) m.metadata = body["metadata"];
+      if (body["file_ids"] !== void 0) {
+        const ids = body["file_ids"];
+        const missing = ids.find((id) => !files.has(id));
+        if (missing !== void 0) return err("file_not_found");
+        if (ids.length > 0) m.files = ids.map((id) => ({ id, name: files.get(id).name }));
+        else delete m.files;
+      }
       writes.push(["edit", m.text]);
       return { body: { ok: true, ts: m.ts } };
     },
@@ -82,6 +94,55 @@ function fakeChannel(options = {}) {
       if (!parent) return err("thread_not_found");
       return { body: { ok: true, messages: [parent, ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)] } };
     },
+    "files.getUploadURLExternal": ({ body }) => {
+      const id = `F${++f}`;
+      const name = body["filename"];
+      files.set(id, { id, name, title: name, mimetype: "" });
+      return { body: { ok: true, file_id: id, upload_url: `https://files.slack.com/upload/v1/fake?file=${id}` } };
+    },
+    upload_url: ({ body, bytes }) => {
+      const file = files.get(body["file"]);
+      if (!file) return { status: 404, body: "" };
+      if (bytes !== void 0) file.bytes = bytes;
+      return { body: "OK - " + String(bytes?.byteLength ?? 0) };
+    },
+    "files.completeUploadExternal": ({ body }) => {
+      const done = body["files"];
+      for (const { id, title } of done) {
+        const file = files.get(id);
+        if (!file || file.bytes === void 0) return err("file_not_found");
+        if (title !== void 0) file.title = title;
+      }
+      const channel = body["channel_id"];
+      if (channel !== void 0) {
+        const ts = `${++n}.000000`;
+        const m = {
+          ts,
+          text: body["initial_comment"] ?? "",
+          bot_id: "B_BOT",
+          files: done.map(({ id }) => ({ id, name: files.get(id).name }))
+        };
+        if (body["thread_ts"]) m.thread_ts = body["thread_ts"];
+        for (const { id } of done) files.get(id).channel = channel;
+        messages.push(m);
+        writes.push(["share", m.text]);
+      }
+      return { body: { ok: true, files: done.map(({ id }) => ({ id })) } };
+    },
+    "files.info": ({ body }) => {
+      const file = files.get(body["file"]);
+      if (!file) return err("file_not_found");
+      const reads = (infoReads.get(file.id) ?? 0) + 1;
+      infoReads.set(file.id, reads);
+      if (reads > (options.processedAfter ?? 0)) file.mimetype = file.name.endsWith(".png") ? "image/png" : "application/octet-stream";
+      return { body: { ok: true, file: { id: file.id, name: file.name, title: file.title, mimetype: file.mimetype } } };
+    },
+    "files.delete": ({ body }) => {
+      const id = body["file"];
+      if (!files.delete(id)) return err("file_not_found");
+      writes.push(["delete_file", id]);
+      return { body: { ok: true } };
+    },
     "conversations.history": ({ body }) => {
       const oldest = Number(body["oldest"] ?? 0);
       const top = messages.filter((x) => !x.thread_ts && Number(x.ts) >= oldest).reverse();
@@ -97,7 +158,7 @@ function fakeChannel(options = {}) {
     };
   }
   const { client: c, calls } = fakeClient(intercepted, options.clientOptions);
-  return { client: c, calls, messages, writes, routes };
+  return { client: c, calls, messages, files, writes, routes };
 }
 var timeoutError = () => Object.assign(new Error("The operation timed out."), { name: "TimeoutError" });
 export {

@@ -1,5 +1,6 @@
 import {
   CHANNEL_TTL_MS,
+  FilesNotAttachedError,
   MAX_CACHED_USERS,
   NON_IDEMPOTENT,
   NOT_FOUND_TTL_MS,
@@ -18,7 +19,7 @@ import {
   slackCall,
   splitBody,
   webClientTransport
-} from "./chunk-LITWYH3J.js";
+} from "./chunk-QDYRCO3N.js";
 import {
   EditRateLimited,
   OrphanedRepliesError,
@@ -28,7 +29,7 @@ import {
   msgHash,
   sync,
   toMsg
-} from "./chunk-ZJWW4GA7.js";
+} from "./chunk-D6SVSKFD.js";
 import {
   hash53,
   stableStringify
@@ -382,8 +383,10 @@ async function syncSlots(client, store, thread, options = {}) {
         }
       }
       if (found) {
-        if (slot === null) state.parent = { ts: found.id, hash };
-        else state.slots[slot] = { ts: found.id, hash };
+        const stamped = found.metadata?.event_payload?.[THRDS_HASH];
+        const live = typeof stamped === "string" ? stamped : hash;
+        if (slot === null) state.parent = { ts: found.id, hash: live };
+        else state.slots[slot] = { ts: found.id, hash: live };
         actions2.push({ type: "ADOPT", slot, ts: found.id });
       }
       delete state.pending;
@@ -684,6 +687,7 @@ function threadStore(client, threadTs) {
 export {
   CHANNEL_TTL_MS,
   EditRateLimited,
+  FilesNotAttachedError,
   LeaseLostError,
   MAX_CACHED_USERS,
   NON_IDEMPOTENT,

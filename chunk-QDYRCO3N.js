@@ -6,7 +6,7 @@ import {
   msgHash,
   sync,
   toMsg
-} from "./chunk-ZJWW4GA7.js";
+} from "./chunk-D6SVSKFD.js";
 
 // src/api.ts
 var SLACK_API = "https://slack.com/api";
@@ -265,6 +265,14 @@ function webClientTransport(client) {
     return { json, headers: new Headers({ "x-oauth-scopes": scopes.join(",") }) };
   };
 }
+var FilesNotAttachedError = class extends Error {
+  constructor(ts, options) {
+    super(`posted ${ts}, but attaching its files failed`, options);
+    this.ts = ts;
+    this.name = "FilesNotAttachedError";
+  }
+  ts;
+};
 var CHANNEL_ID = /^[CDG][A-Z0-9]{6,}$/;
 var sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 function toUser(raw) {
@@ -516,10 +524,15 @@ var SlackClient = class _SlackClient {
     const key = msg.stamp ?? this.options.stamp ?? true ? contentKey(msg) : msg.text;
     return key === msg.text ? { id, content: msg.text } : { id, content: msg.text, key };
   }
-  /** Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. */
+  /**
+   * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
+   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+   */
   async post(m, threadId) {
     const msg = toMsg(m);
-    const data = this.body(msg);
+    const { files, ...bare } = msg;
+    const attach = files !== void 0 && files.length > 0;
+    const data = this.body(attach ? bare : msg);
     const username = msg.username ?? this.username;
     const iconUrl = msg.iconUrl ?? this.iconUrl;
     const iconEmoji = msg.iconEmoji ?? this.iconEmoji;
@@ -533,16 +546,81 @@ var SlackClient = class _SlackClient {
     const result = await this.api("chat.postMessage", data);
     const ts = result["ts"];
     if (typeof ts !== "string" || !ts) throw new SlackApiError("chat.postMessage", "invalid_response", 200, result, void 0, "http");
+    if (attach) {
+      try {
+        return await this.edit(ts, msg);
+      } catch (e) {
+        throw new FilesNotAttachedError(ts, { cause: e });
+      }
+    }
     return this.sent(ts, msg);
   }
   /**
-   * Edit a message's text, blocks, attachments and metadata. Slack ignores sender fields on an edit. To clear blocks
-   * or attachments, pass `[]`; omitting them leaves them as they were. For Slack's raw reply (`message`), call
-   * `api("chat.update", …)` directly.
+   * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
+   * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
+   * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
    */
   async edit(messageId, m) {
-    await this.api("chat.update", { ...this.body(m), ts: messageId });
-    return this.sent(messageId, m);
+    const msg = toMsg(m);
+    const data = { ...this.body(msg), ts: messageId };
+    if (msg.files !== void 0) data["file_ids"] = msg.files;
+    await this.api("chat.update", data);
+    return this.sent(messageId, msg);
+  }
+  /**
+   * Upload a file (`files.getUploadURLExternal`, the bytes, `files.completeUploadExternal`); returns its id. Unshared
+   * unless `channel` is given: attach it to a message with `Msg.files`, or reference it from an `image` block.
+   */
+  async upload(name, data, options = {}) {
+    const bytes = typeof data === "string" ? new TextEncoder().encode(data) : data instanceof Blob ? new Uint8Array(await data.arrayBuffer()) : data instanceof ArrayBuffer ? new Uint8Array(data) : data;
+    const request = { filename: name, length: bytes.byteLength };
+    if (options.altText !== void 0) request["alt_txt"] = options.altText;
+    const target = await this.api("files.getUploadURLExternal", request, { form: true });
+    const id = target["file_id"];
+    const { fetch: fetchImpl = globalThis.fetch, timeoutMs = 3e4 } = this.options;
+    let response;
+    try {
+      response = await fetchImpl(target["upload_url"], {
+        method: "POST",
+        body: bytes,
+        ...timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}
+      });
+    } catch (e) {
+      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new SlackApiError("upload_url", "timeout", 0);
+      throw new SlackApiError("upload_url", "transport_error", 0, void 0, void 0, "transport", { cause: e });
+    }
+    await response.text();
+    if (!response.ok) throw new SlackApiError("upload_url", `http_${response.status}`, response.status);
+    const done = { files: [{ id, title: options.title ?? name }] };
+    if (options.channel !== void 0) {
+      done["channel_id"] = options.channel;
+      if (options.initialComment !== void 0) done["initial_comment"] = options.initialComment;
+      if (options.threadTs !== void 0) done["thread_ts"] = options.threadTs;
+    }
+    await this.api("files.completeUploadExternal", done);
+    if (options.processed) {
+      const { timeoutMs: limit = 3e4, intervalMs = 1e3 } = options.processed === true ? {} : options.processed;
+      const start = this.now();
+      for (; ; ) {
+        const file = await this.fileInfo(id);
+        if (file["mimetype"]) break;
+        if (this.now() - start + intervalMs > limit) throw new SlackApiError("files.info", "timeout", 0, file);
+        await (this.options.sleep ?? sleep)(intervalMs);
+      }
+    }
+    return id;
+  }
+  /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */
+  async fileInfo(id) {
+    return (await this.api("files.info", { file: id }, { get: true }))["file"];
+  }
+  /** Delete a file (`files.delete`), e.g. the one an edit just replaced. A file that's already gone is fine. */
+  async deleteFile(id) {
+    try {
+      await this.api("files.delete", { file: id }, { form: true });
+    } catch (e) {
+      if (!(e instanceof SlackApiError && (e.code === "file_not_found" || e.code === "file_deleted"))) throw e;
+    }
   }
   /**
    * One message by ts, read cheaply (`conversations.replies`, `limit: 1`): a thread parent or top-level message, with
@@ -902,6 +980,7 @@ export {
   MAX_CACHED_USERS,
   CHANNEL_TTL_MS,
   webClientTransport,
+  FilesNotAttachedError,
   SlackClient
 };
-//# sourceMappingURL=chunk-LITWYH3J.js.map
+//# sourceMappingURL=chunk-QDYRCO3N.js.map
