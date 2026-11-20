@@ -139,10 +139,10 @@ What Slack does (tested by disky in a DM, 2026-11; [spec][file-replace]):
   - It took about 0.5 s for a 12 KB PNG, 0.6 s for 197 KB and 4.6 s for 3 MB. Time scales with bytes more than pixels.
   - Slack's docs say there's "no need to wait" after `completeUploadExternal`, but an image block on an unprocessed file fails with `invalid_blocks`, and an attached one first renders as a generic file icon.
   - Once processed, an attached image shows large and inline with Download. That holds however the message was created: a plain post, a blocks post, or a message created by the upload.
-- **`file_ids`:** swapping them replaces the attached file. Deleting the replaced file afterwards leaves the new one showing. An edit without `file_ids` keeps the files; `file_ids: []` detaches them, and the file survives.
+- **`file_ids`:** the list is a full, ordered replacement. `[P]` → `[P, Q]` → `[Q]` each read back exactly so, so multiple files work and any one can be added or removed. The most per message is untested; Slack's UI allows 10. Deleting a replaced file afterwards leaves the new one showing. An edit without `file_ids` keeps the files; `file_ids: []` detaches them, and the file survives.
 - **What viewers see:**
   - An edit triggers no new notification.
-  - `(edited)` shows on a plain-text body, but not under section blocks.
+  - Every `chat.update` sets a new `edited.ts`, even one that only changes files. The `(edited)` badge is a client rendering detail: it shows after a plain-text / `rich_text` body, but not under section blocks.
   - Image blocks offer no Download on Android, whether they point at a URL or at a Slack file (`slack_file: {id}` or `{url}`).
 - **Events:** polling `files.info` is the supported way to wait. Slack's `file_change` event ("any property of a file is changed", `files:read`) might announce processing, but that's untested: the test app has no Events API subscription.
 - **Not tested:** what a message shows when a file that's still attached gets deleted.

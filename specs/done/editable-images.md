@@ -36,6 +36,10 @@ Other findings from those runs:
 - **Events:** the Disky Admin Bot has no Events API subscription (no `event_subscriptions`, socket mode off), so whether `file_change` fires on processing is unverified.
 - **Slack's own docs** (`files.getUploadURLExternal`) say there's "no need to wait" for processing, which the `invalid_blocks` failures and file-icon renders contradict.
 
+## Experiment 5: multiple files (disky)
+
+Starting from a text-only message, three `chat.update`s with the same text: `file_ids` `[P]` → `[P, Q]` → `[Q]`. Each was ok and read back exactly that list, in that order. So `Msg.files` is a full replacement list. Every update set a new `edited.ts`, even when only the files changed. The `(edited)` badge shows after a plain-text / `rich_text` body, not under section blocks. Untested: the maximum files per message (Slack's UI allows 10).
+
 ## What landed (TS, `ts`)
 
 - **Processing wait** (`upload`, on by default):
@@ -62,4 +66,4 @@ Other findings from those runs:
 - `replace_file(ts, name, data, content, …)` and `FileSwapError`.
 - A README section.
 
-There's no slots store in Python, so the stateless `replace_file` is the hourly helper there.
+There's no slots store in Python, so the stateless `replace_file` is the hourly helper there. Landed in `py` `343c24e`.
