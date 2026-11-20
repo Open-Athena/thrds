@@ -5,7 +5,7 @@ from .linked import LinkedSyncResult, LinkedThread, Section
 from .lint import BskyLinter, DiscordLinter, LintIssue, LintReport, MastodonLinter
 from .mastodon import MastodonClient
 from .protocol import ThreadClient
-from .slack import RecoveredSession, ScanCapReached, SlackApiError, SlackClient
+from .slack import FilesNotAttachedError, RecoveredSession, ScanCapReached, SlackApiError, SlackClient
 from .state import SessionState, StagingChrome, ThreadEntry, ThreadTarget
 from .threadfile import ThreadFile, thread_files, thread_filename
 
@@ -40,6 +40,7 @@ __all__ = [
     "SenderChangeForbidden",
     "SenderChangePolicy",
     "SessionState",
+    "FilesNotAttachedError",
     "SlackApiError",
     "SlackClient",
     "StagingChrome",

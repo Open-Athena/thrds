@@ -131,6 +131,13 @@ class SlackApiError(RuntimeError):
         self.code = code
 
 
+class FilesNotAttachedError(RuntimeError):
+    """`post(files=…)` landed (``ts``), but the edit attaching the files failed."""
+    def __init__(self, ts: str):
+        super().__init__(f"posted {ts}, but attaching its files failed")
+        self.ts = ts
+
+
 class ScanCapReached(RuntimeError):
     """Raised by ``scan_thrds_metadata`` when ``max_pages`` is exhausted
     before ``has_more`` clears.
@@ -539,6 +546,7 @@ class SlackClient:
         raw: bool | None = None,
         broadcast: bool = False,
         metadata: dict | None = None,
+        files: Sequence[str] = (),
     ) -> Message:
         """
         Sender fields resolve message override → client default → unset.
@@ -569,6 +577,11 @@ class SlackClient:
         "event_payload": {…}}``) sent with the post, for consumers that tag
         their messages to find them again (`find_by_metadata`). It wins over
         the per-content metadata `sync` sets.
+
+        ``files`` are uploaded file ids (`upload`) to attach below the message.
+        ``chat.postMessage`` takes no ``file_ids``, so they're attached by an
+        `edit` right after the post; if that fails, `FilesNotAttachedError`
+        (with the posted ``ts``) is raised.
         """
         if broadcast and thread_id is None:
             raise ValueError(
@@ -632,6 +645,11 @@ class SlackClient:
         if md is not None:
             data["metadata"] = md
         result = self._request("chat.postMessage", data)
+        if files:
+            try:
+                self.edit(result["ts"], content, raw=raw, metadata=metadata, files=files)
+            except Exception as e:
+                raise FilesNotAttachedError(result["ts"]) from e
         # Return the ORIGINAL markdown as `content` — that's the local source
         # of truth, and callers (state.py, tests) compare against it directly.
         return Message(id=result["ts"], content=content)
@@ -776,7 +794,7 @@ class SlackClient:
         thread_ts: str | None = None,
         title: str | None = None,
         alt_text: str | None = None,
-        processed: bool | float = False,
+        processed: bool | float = True,
         poll_interval: float = 1.0,
     ) -> str:
         """Upload a file (``files.getUploadURLExternal``, the bytes,
@@ -788,10 +806,12 @@ class SlackClient:
         a message with ``edit(..., files=[id])``, or reference it from an
         ``image`` block (``slack_file: {id}``).
 
-        ``processed`` waits until Slack has processed the file (``files.info``
-        reports a ``mimetype``): an image block on it fails with
-        ``invalid_blocks`` until then. ``True`` waits up to 30 s; a number is
-        the timeout in seconds. Raises ``SlackApiError`` (code ``timeout``)
+        ``processed`` (on by default; needs ``files:read``) waits until Slack
+        has processed the file (``files.info`` reports a ``mimetype``). Until
+        then an image block on it fails with ``invalid_blocks``, and an
+        attached one renders on phones as a generic file icon rather than
+        inline. ``True`` waits up to 30 s; a number is the timeout in seconds;
+        ``False`` skips the wait. Raises ``SlackApiError`` (code ``timeout``)
         when time runs out.
         """
         body = data.encode() if isinstance(data, str) else data
@@ -844,7 +864,7 @@ class SlackClient:
         created workspace-side owned by the bot, not posted to any channel: an
         image block surfaces it by id, so this waits until Slack has processed
         it (before that, a ``slack_file`` block fails with ``invalid_blocks``)."""
-        return self.upload(path.name, path.read_bytes(), processed=True)
+        return self.upload(path.name, path.read_bytes())
 
     def _upload_cached(self, sha: str, path: str) -> str:
         """`file_id` for image ``sha`` at ``path``, uploading once per push."""
