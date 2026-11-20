@@ -1,10 +1,10 @@
 # Several live attached images per message: `upsertFiles` (plan; from disky)
 
-**Status: TS landed; Python next.** Ryan said "resume/continue" (2026-11-20) and sent phone screenshots of experiments 6–7 (see "Layout" below).
+**Status: done** (TS `82396e9`, Python `py` `c0bccc5`). Ryan said "resume/continue" (2026-11-20) and sent phone screenshots of experiments 6–7 (see "Layout" below).
 
 ## Why
 
-Some messages carry several live images: the fleet card's 4 panels, or a digest OP's plot and treemap. Attached as separate files, each keeps phone Download, instead of one mosaic image. Experiment 5 showed `chat.update` `file_ids` is a full, ordered replacement list (`[P]` → `[P, Q]` → `[Q]` read back exactly), so the toolkit's single-file swap ([`editable-images`](done/editable-images.md)) generalizes.
+Some messages carry several live images: the fleet card's 4 panels, or a digest OP's plot and treemap. Attached as separate files, each keeps phone Download, instead of one mosaic image. Experiment 5 showed `chat.update` `file_ids` is a full, ordered replacement list (`[P]` → `[P, Q]` → `[Q]` read back exactly), so the toolkit's single-file swap ([`editable-images`](editable-images.md)) generalizes.
 
 ## API
 
@@ -75,3 +75,11 @@ Python (no slots store): `replace_files(ts, files: Sequence[tuple[str, bytes | s
 - The write is refused vs. times out: new uploads deleted vs. kept, and reused ones untouched either way.
 - A record from `upsertFile` without `fileHashes` uploads everything once, then dedupes.
 - Python: `replace_files` dedupes from the live message's `thrds_files` metadata.
+
+## What landed (Python, `py` `c0bccc5`)
+
+- `replace_files(ts, files: Sequence[FileSpec | (name, data)], content, *, raw, metadata, previous)` returns `FilesSwap(file_ids, uploaded, deleted, undeleted)`, with a `.file_id` property. `replace_file` is its one-file form, and `FileSwap` is gone.
+- `attached_files(ts)` reads `(id, hash | None)` pairs from the message (`include_all_metadata`).
+- `hash53_bytes` matches TS `hash53Bytes` bit for bit (a test pins TS reference values), so `thrds_files` written by either side dedupes in the other. It's pure Python, so expect ~1 s per few MB.
+- `FileSwapError(file_ids, deleted)` has a `.file_id` property.
+- README: `replace_files`, and the swipe-row layout.
