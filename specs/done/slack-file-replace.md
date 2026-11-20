@@ -47,7 +47,7 @@ Not covered: what Slack shows when a file that's still attached gets deleted (th
 
 ## Python parity
 
-Landed on `py` in `ab8c97b`:
+Landed on `py` in `ab8c97b` and `27f4b13`:
 - `upload(name, data, *, channel, initial_comment, thread_ts, title, alt_text, processed)` and `file_info`.
 - `edit(..., files=)` sends `file_ids` (`None` leaves the files alone, `[]` detaches).
 - `delete_file` tolerates `file_not_found` / `file_deleted`.
