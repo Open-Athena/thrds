@@ -598,8 +598,9 @@ var SlackClient = class _SlackClient {
       if (options.threadTs !== void 0) done["thread_ts"] = options.threadTs;
     }
     await this.api("files.completeUploadExternal", done);
-    if (options.processed) {
-      const { timeoutMs: limit = 3e4, intervalMs = 1e3 } = options.processed === true ? {} : options.processed;
+    const processed = options.processed ?? true;
+    if (processed) {
+      const { timeoutMs: limit = 3e4, intervalMs = 1e3 } = processed === true ? {} : processed;
       const start = this.now();
       for (; ; ) {
         const file = await this.fileInfo(id);
@@ -983,4 +984,4 @@ export {
   FilesNotAttachedError,
   SlackClient
 };
-//# sourceMappingURL=chunk-QDYRCO3N.js.map
+//# sourceMappingURL=chunk-LLGOOIRW.js.map
