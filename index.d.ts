@@ -1,6 +1,6 @@
 export { A as Action, a as ActionType, E as EditRateLimited, M as Message, b as MessageMetadata, c as Msg, d as MsgLike, O as OrphanedRepliesError, S as Sender, e as SyncOptions, f as SyncResult, T as THRDS_HASH, g as Thread, h as ThreadClient, U as Unfurl, i as contentKey, j as isRich, m as msgHash, s as sync, t as toMsg } from './core-BNb_OG-w.js';
-export { A as Auth, B as BulletFn, C as CHANNEL_TTL_MS, a as CallOptions, F as FilesNotAttachedError, L as LinkedSyncResult, b as LinkedThread, M as MAX_CACHED_USERS, N as NON_IDEMPOTENT, c as NOT_FOUND_TTL_MS, R as Reaction, d as RetryInfo, S as SLACK_API, e as SLACK_MESSAGE_LIMIT, f as Section, g as SlackApiError, h as SlackClient, i as SlackClientOptions, j as SlackDeleteOptions, k as SlackErrorKind, l as SlackMessage, m as SlackPostOptions, n as SlackResponse, o as SlackSyncOptions, p as SlackUser, T as Transport, q as TransportOptions, U as USERNAME_MAX, r as USER_TTL_MS, s as UploadData, t as UploadOptions, u as buildDetailMessages, v as buildSummaryMessages, w as collect, x as defaultBullet, y as paginate, z as slackApi, D as slackCall, E as splitBody, G as webClientTransport } from './slack-B1iaAsMP.js';
-export { L as LeaseLostError, R as REJECTED, a as RenderedSlotThread, S as SLOT_KEY, b as SLOT_NAME, c as SlotAction, d as SlotActionType, e as SlotClient, f as SlotParent, g as SlotRecord, h as SlotSpec, i as SlotState, j as SlotStore, k as SlotSyncOptions, l as SlotSyncResult, m as SlotThread, n as SlotThreadSpec, U as UpsertOptions, o as importAnchor, p as memoryStore, q as oneKeyStore, r as partialOf, s as syncSlots, t as tagSlot, u as threadStore, v as upsert } from './slots-BsTMoI6H.js';
+export { A as Auth, B as BulletFn, C as CHANNEL_TTL_MS, a as CallOptions, F as FileNotProcessedError, b as FileSwap, c as FileSwapError, d as FilesNotAttachedError, L as LinkedSyncResult, e as LinkedThread, M as MAX_CACHED_USERS, N as NON_IDEMPOTENT, f as NOT_FOUND_TTL_MS, R as Reaction, g as RetryInfo, S as SLACK_API, h as SLACK_MESSAGE_LIMIT, i as Section, j as SlackApiError, k as SlackClient, l as SlackClientOptions, m as SlackDeleteOptions, n as SlackErrorKind, o as SlackMessage, p as SlackPostOptions, q as SlackResponse, r as SlackSyncOptions, s as SlackUser, T as Transport, t as TransportOptions, U as USERNAME_MAX, u as USER_TTL_MS, v as UploadData, w as UploadOptions, x as buildDetailMessages, y as buildSummaryMessages, z as collect, D as defaultBullet, E as definitelyNotAttached, G as isProcessed, H as paginate, I as slackApi, J as slackCall, K as splitBody, O as swapFile, P as toBytes, Q as webClientTransport } from './slack-Czh9-JyB.js';
+export { F as FILE_HASH, L as LeaseLostError, R as REJECTED, a as RenderedSlotThread, S as SLOT_KEY, b as SLOT_NAME, c as SlotAction, d as SlotActionType, e as SlotClient, f as SlotParent, g as SlotRecord, h as SlotSpec, i as SlotState, j as SlotStore, k as SlotSyncOptions, l as SlotSyncResult, m as SlotThread, n as SlotThreadSpec, U as UpsertOptions, o as UpsertResult, p as importAnchor, q as memoryStore, r as oneKeyStore, s as partialOf, t as syncSlots, u as tagSlot, v as threadStore, w as upsert, x as upsertFile } from './slots-CJ_mAbzm.js';
 
 /**
  * Slack mrkdwn and Block Kit helpers: the escaping, links, mentions and block shapes every bot re-writes.
@@ -44,10 +44,22 @@ declare function section(text: string, options?: {
 }): Block;
 /** Small grey lines: strings become mrkdwn elements; pass `image(...)`-style objects as is. */
 declare function context(...elements: Array<string | Block>): Block;
-/** An image block from a public URL, or (`{ slackFile }`) a file uploaded to Slack, by id. */
+/**
+ * An image block: from a public URL (`image_url`), or a file uploaded to Slack, by id (`{ slackFile }`) or by its
+ * `url_private` / permalink (`{ slackFileUrl }`). Edited in place, a URL image only refreshes under a new URL
+ * (`versionedUrl`), and a Slack file must be processed first (`upload` waits by default). Phone apps offer no Download
+ * on image blocks; attach the file (`Msg.files`) for that.
+ */
 declare function image(src: string | {
     slackFile: string;
+} | {
+    slackFileUrl: string;
 }, alt: string, title?: string): Block;
+/**
+ * `url` with `v=<version>` set in its query: Slack caches an image block's picture by URL, so an edit that keeps the
+ * URL keeps showing the old image. Use a content hash or timestamp as the version (or sign the URL per version).
+ */
+declare function versionedUrl(url: string, version: string | number, param?: string): string;
 /** A `context` / `section`-accessory image element. */
 declare const imageElement: (url: string, alt: string) => Block;
 interface ButtonOptions {
@@ -191,4 +203,4 @@ declare function stableStringify(value: unknown): string;
  */
 declare function hash53(s: string, seed?: number): string;
 
-export { type Block, type ButtonOptions, type FoundPermalink, type MessageRef, PRIVATE_METADATA_MAX, type RichStyle, actions, bound, buildPermalink, button, context, date, datePicker, decodePrivateMetadata, divider, encodePrivateMetadata, escape, fitsPrivateMetadata, hash53, header, image, imageElement, input, link, mention, modal, mrkdwnText, option, parsePermalink, permalinksIn, plainText, plainTextInput, rich, section, stableStringify, staticSelect, usersSelect, withoutImages, withoutPermalinks };
+export { type Block, type ButtonOptions, type FoundPermalink, type MessageRef, PRIVATE_METADATA_MAX, type RichStyle, actions, bound, buildPermalink, button, context, date, datePicker, decodePrivateMetadata, divider, encodePrivateMetadata, escape, fitsPrivateMetadata, hash53, header, image, imageElement, input, link, mention, modal, mrkdwnText, option, parsePermalink, permalinksIn, plainText, plainTextInput, rich, section, stableStringify, staticSelect, usersSelect, versionedUrl, withoutImages, withoutPermalinks };

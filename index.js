@@ -1,5 +1,7 @@
 import {
   CHANNEL_TTL_MS,
+  FileNotProcessedError,
+  FileSwapError,
   FilesNotAttachedError,
   MAX_CACHED_USERS,
   NON_IDEMPOTENT,
@@ -14,12 +16,16 @@ import {
   buildSummaryMessages,
   collect,
   defaultBullet,
+  definitelyNotAttached,
+  isProcessed,
   paginate,
   slackApi,
   slackCall,
   splitBody,
+  swapFile,
+  toBytes,
   webClientTransport
-} from "./chunk-LLGOOIRW.js";
+} from "./chunk-OEYKFBJH.js";
 import {
   EditRateLimited,
   OrphanedRepliesError,
@@ -29,11 +35,12 @@ import {
   msgHash,
   sync,
   toMsg
-} from "./chunk-D6SVSKFD.js";
+} from "./chunk-OY4HFIJO.js";
 import {
   hash53,
+  hash53Bytes,
   stableStringify
-} from "./chunk-YSTFV535.js";
+} from "./chunk-3ZH5IQC7.js";
 
 // src/mrkdwn.ts
 var escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -83,9 +90,15 @@ function context(...elements) {
 function image(src, alt, title) {
   const block = { type: "image", alt_text: alt };
   if (typeof src === "string") block["image_url"] = src;
-  else block["slack_file"] = { id: src.slackFile };
+  else if ("slackFile" in src) block["slack_file"] = { id: src.slackFile };
+  else block["slack_file"] = { url: src.slackFileUrl };
   if (title) block["title"] = plainText(title);
   return block;
+}
+function versionedUrl(url, version, param = "v") {
+  const u = new URL(url);
+  u.searchParams.set(param, String(version));
+  return u.toString();
 }
 var imageElement = (url, alt) => ({ type: "image", image_url: url, alt_text: alt });
 function button(options) {
@@ -264,6 +277,7 @@ function withoutPermalinks(text) {
 }
 
 // src/slots.ts
+var slotRecord = (ts, hash, files) => files !== void 0 && files.length > 0 ? { ts, hash, files } : { ts, hash };
 var LeaseLostError = class extends Error {
   constructor(key) {
     super(`slot lease lost for ${key}: another run took over`);
@@ -421,7 +435,7 @@ async function syncSlots(client, store, thread, options = {}) {
         await save();
         ts = (await client.post(sent, threadTs)).id;
       }
-      record(slot, { ts, hash: msgHash(sent) });
+      record(slot, slotRecord(ts, msgHash(sent), sent.files));
       delete state.pending;
       await save();
       return { ts, fell: sent !== msg };
@@ -453,6 +467,7 @@ async function syncSlots(client, store, thread, options = {}) {
         return { ts: target.ts, reposted: false };
       }
       let sentHash = hash;
+      let sentFiles = msg.files;
       let fell = false;
       try {
         await beforeWrite();
@@ -463,6 +478,7 @@ async function syncSlots(client, store, thread, options = {}) {
           const fb = tagSlot(mode.fallback, key, slot);
           await client.edit(target.ts, fb);
           sentHash = msgHash(fb);
+          sentFiles = fb.files;
           fell = true;
         }
       } catch (e) {
@@ -480,7 +496,7 @@ async function syncSlots(client, store, thread, options = {}) {
         actions2.push({ type: refell ? "FALLBACK" : "REPOST", slot, ts });
         return { ts, reposted: true };
       }
-      record(slot, { ts: target.ts, hash: sentHash });
+      record(slot, slotRecord(target.ts, sentHash, sentFiles ?? current?.files));
       state.channel = client.channel;
       unsaved = true;
       actions2.push({ type: fell ? "FALLBACK" : "EDIT", slot, ts: target.ts });
@@ -597,6 +613,36 @@ async function upsert(client, store, key, msg, options = {}) {
   const result = await syncSlots(client, store, { key, parent }, rest);
   return { status: result.status, ts: result.ts, action: result.actions.at(-1)?.type ?? null };
 }
+var FILE_HASH = "thrds_file";
+async function upsertFile(client, store, key, msg, file, options = {}) {
+  const { name, data, ...uploadOptions } = file;
+  const bytes = await toBytes(data);
+  const base = toMsg(msg);
+  const withFile = (files) => ({
+    ...base,
+    files,
+    metadata: {
+      event_type: base.metadata?.event_type ?? "thrds_slot",
+      event_payload: { ...base.metadata?.event_payload, [FILE_HASH]: hash53Bytes(bytes) }
+    }
+  });
+  const record = (await store.get(key))?.parent;
+  const previous = record?.files ?? [];
+  const none = { deleted: [], undeleted: [] };
+  if (record === void 0 && options.create === false && options.ts === void 0) {
+    return { ...await upsert(client, store, key, base, options), fileId: null, ...none };
+  }
+  if (!options.force && previous.length === 1 && record !== void 0 && msgHash(tagSlot(withFile(previous), key, null)) === record.hash) {
+    return { ...await upsert(client, store, key, withFile(previous), options), fileId: previous[0], ...none };
+  }
+  const { result, ...swap } = await swapFile(
+    client,
+    previous,
+    () => client.upload(name, bytes, uploadOptions),
+    (id) => upsert(client, store, key, withFile([id]), options)
+  );
+  return { ...result, ...swap };
+}
 async function importAnchor(store, key, anchor) {
   const state = { slots: {} };
   if (anchor.channel !== void 0) state.channel = anchor.channel;
@@ -687,6 +733,9 @@ function threadStore(client, threadTs) {
 export {
   CHANNEL_TTL_MS,
   EditRateLimited,
+  FILE_HASH,
+  FileNotProcessedError,
+  FileSwapError,
   FilesNotAttachedError,
   LeaseLostError,
   MAX_CACHED_USERS,
@@ -717,6 +766,7 @@ export {
   datePicker,
   decodePrivateMetadata,
   defaultBullet,
+  definitelyNotAttached,
   divider,
   encodePrivateMetadata,
   escape,
@@ -727,6 +777,7 @@ export {
   imageElement,
   importAnchor,
   input,
+  isProcessed,
   isRich,
   link,
   memoryStore,
@@ -749,13 +800,17 @@ export {
   splitBody,
   stableStringify,
   staticSelect,
+  swapFile,
   sync,
   syncSlots,
   tagSlot,
   threadStore,
+  toBytes,
   toMsg,
   upsert,
+  upsertFile,
   usersSelect,
+  versionedUrl,
   webClientTransport,
   withoutImages,
   withoutPermalinks

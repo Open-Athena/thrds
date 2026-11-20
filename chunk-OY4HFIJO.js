@@ -1,7 +1,7 @@
 import {
   hash53,
   stableStringify
-} from "./chunk-YSTFV535.js";
+} from "./chunk-3ZH5IQC7.js";
 
 // src/core.ts
 var EditRateLimited = class extends Error {
@@ -181,4 +181,4 @@ export {
   contentKey,
   sync
 };
-//# sourceMappingURL=chunk-D6SVSKFD.js.map
+//# sourceMappingURL=chunk-OY4HFIJO.js.map

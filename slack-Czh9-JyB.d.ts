@@ -42,7 +42,8 @@ interface RetryInfo {
     /** 1-based: the retry about to happen. */
     attempt: number;
     waitMs: number;
-    reason: "http_429" | "ratelimited" | "server_error" | "timeout";
+    /** `transport`: a dropped connection (only retried for an upload's bytes, which are safe to re-send). */
+    reason: "http_429" | "ratelimited" | "server_error" | "timeout" | "transport";
 }
 /**
  * Writes that create something: a 5xx or timeout leaves it unknown whether the write landed, so they are never
@@ -200,8 +201,52 @@ declare class FilesNotAttachedError extends Error {
         cause?: unknown;
     });
 }
+/** Slack hadn't processed an upload in time. An unshared one is deleted (`deleted`), since nothing can use it. */
+declare class FileNotProcessedError extends Error {
+    readonly fileId: string;
+    readonly waitedMs: number;
+    readonly deleted: boolean;
+    constructor(fileId: string, waitedMs: number, deleted: boolean);
+}
+/**
+ * Attaching a newly uploaded file failed (`cause`). If Slack definitely refused the write, the upload was deleted
+ * (`deleted`); otherwise the write may have landed, so the file is kept and `fileId` says which one it is.
+ */
+declare class FileSwapError extends Error {
+    readonly fileId: string;
+    readonly deleted: boolean;
+    constructor(fileId: string, deleted: boolean, options?: {
+        cause?: unknown;
+    });
+}
+/** What a file swap did: the new file's id, and which replaced files were deleted (or couldn't be). */
+interface FileSwap {
+    fileId: string;
+    deleted: string[];
+    /** Replaced files whose `files.delete` failed (other than already being gone): delete them later, or by hand. */
+    undeleted: Array<{
+        id: string;
+        error: unknown;
+    }>;
+}
+/**
+ * Whether Slack has processed an upload (`files.info`'s `file`): it reports a `mimetype`, and an image has thumbnails
+ * (`thumb_*`), which it can lack for a moment after the `mimetype` appears (disky waited for both, and saw images render
+ * inline from the first view).
+ */
+declare function isProcessed(file: Record<string, unknown>): boolean;
 /** What `upload` sends: bytes, or a string as UTF-8. */
 type UploadData = Uint8Array | ArrayBuffer | Blob | string;
+declare function toBytes(data: UploadData): Promise<Uint8Array>;
+/** Whether a failed write certainly didn't attach anything: Slack refused it, or refused the edit after a post. */
+declare function definitelyNotAttached(e: unknown): boolean;
+/**
+ * Upload a replacement, `write` it (an edit or upsert that attaches it), then delete the `previous` files it replaced.
+ * A write that fails deletes the new upload when Slack definitely refused it; either way it throws `FileSwapError`.
+ */
+declare function swapFile<T>(client: Pick<SlackClient, "deleteFile">, previous: readonly string[], upload: () => Promise<string>, write: (fileId: string) => Promise<T>): Promise<FileSwap & {
+    result: T;
+}>;
 interface UploadOptions {
     /** Share the file into this channel, which posts a file message. Unshared by default. */
     channel?: string;
@@ -213,10 +258,11 @@ interface UploadOptions {
     title?: string;
     altText?: string;
     /**
-     * Return only once Slack has processed the file (`files.info` reports its `mimetype`; needs `files:read`). On by
-     * default: an `image` block on an unprocessed file (`slack_file: {id}`) fails with `invalid_blocks`, and one attached
-     * with `files` first renders on phones as a generic file icon rather than inline. `true` polls every second for up
-     * to 30 s; `false` skips the wait. Throws a `timeout` `SlackApiError` when time runs out.
+     * Return only once Slack has processed the file (`isProcessed`: a `mimetype`, and thumbnails for an image; needs
+     * `files:read`). On by default: an `image` block on an unprocessed file (`slack_file: {id}`) fails with
+     * `invalid_blocks`, and one attached with `files` first renders on phones as a generic file icon rather than inline.
+     * Processing took ~0.5 s for a 12 KB PNG and ~4.6 s for 3 MB (disky, 2026-11). `true` polls every 0.5 s for up to
+     * 30 s; `false` skips the wait. Past the limit it throws `FileNotProcessedError`, deleting the file if it's unshared.
      */
     processed?: boolean | {
         timeoutMs?: number;
@@ -387,6 +433,23 @@ declare class SlackClient implements ThreadClient {
      * unless `channel` is given: attach it to a message with `Msg.files`, or reference it from an `image` block.
      */
     upload(name: string, data: UploadData, options?: UploadOptions): Promise<string>;
+    /**
+     * POST an upload's bytes to its `upload_url`, retrying (like `slackCall`, up to `retries`, exponential from 1 s, or
+     * `Retry-After`) on a 429, a 5xx, a timeout or a dropped connection. That's safe: until `completeUploadExternal`,
+     * a re-sent body just replaces the last one.
+     */
+    private sendUpload;
+    /**
+     * Swap the file attached to message `ts`: upload `file`, edit the message to `m` with only the new file attached,
+     * then delete the files it had. The previous files are read from the message (a history scope), unless `previous`
+     * is given. See `swapFile` for failures; `upsertFile` is the stored-state version.
+     */
+    replaceFile(ts: string, file: {
+        name: string;
+        data: UploadData;
+    } & UploadOptions, m: MsgLike, options?: {
+        previous?: string[];
+    }): Promise<FileSwap>;
     /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */
     fileInfo(id: string): Promise<Record<string, unknown>>;
     /** Delete a file (`files.delete`), e.g. the one an edit just replaced. A file that's already gone is fine. */
@@ -480,4 +543,4 @@ declare class SlackClient implements ThreadClient {
     }): Promise<LinkedSyncResult>;
 }
 
-export { type Auth as A, type BulletFn as B, CHANNEL_TTL_MS as C, slackCall as D, splitBody as E, FilesNotAttachedError as F, webClientTransport as G, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, type CallOptions as a, type LinkedThread as b, NOT_FOUND_TTL_MS as c, type RetryInfo as d, SLACK_MESSAGE_LIMIT as e, type Section as f, SlackApiError as g, SlackClient as h, type SlackClientOptions as i, type SlackDeleteOptions as j, type SlackErrorKind as k, type SlackMessage as l, type SlackPostOptions as m, type SlackResponse as n, type SlackSyncOptions as o, type SlackUser as p, type TransportOptions as q, USER_TTL_MS as r, type UploadData as s, type UploadOptions as t, buildDetailMessages as u, buildSummaryMessages as v, collect as w, defaultBullet as x, paginate as y, slackApi as z };
+export { type Auth as A, type BulletFn as B, CHANNEL_TTL_MS as C, defaultBullet as D, definitelyNotAttached as E, FileNotProcessedError as F, isProcessed as G, paginate as H, slackApi as I, slackCall as J, splitBody as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, swapFile as O, toBytes as P, webClientTransport as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, type CallOptions as a, type FileSwap as b, FileSwapError as c, FilesNotAttachedError as d, type LinkedThread as e, NOT_FOUND_TTL_MS as f, type RetryInfo as g, SLACK_MESSAGE_LIMIT as h, type Section as i, SlackApiError as j, SlackClient as k, type SlackClientOptions as l, type SlackDeleteOptions as m, type SlackErrorKind as n, type SlackMessage as o, type SlackPostOptions as p, type SlackResponse as q, type SlackSyncOptions as r, type SlackUser as s, type TransportOptions as t, USER_TTL_MS as u, type UploadData as v, type UploadOptions as w, buildDetailMessages as x, buildSummaryMessages as y, collect as z };

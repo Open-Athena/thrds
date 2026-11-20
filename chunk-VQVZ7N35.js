@@ -1,7 +1,7 @@
 import {
   hash53,
   stableStringify
-} from "./chunk-YSTFV535.js";
+} from "./chunk-3ZH5IQC7.js";
 
 // src/avatar.ts
 var GLYPHS = {
@@ -289,4 +289,4 @@ export {
   derivedAvatarUrl,
   derivedAvatarHandler
 };
-//# sourceMappingURL=chunk-5HP3RLKL.js.map
+//# sourceMappingURL=chunk-VQVZ7N35.js.map

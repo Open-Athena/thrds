@@ -22,8 +22,8 @@ import {
   sha256Hex,
   sniffImage,
   unbase64
-} from "./chunk-5HP3RLKL.js";
-import "./chunk-YSTFV535.js";
+} from "./chunk-VQVZ7N35.js";
+import "./chunk-3ZH5IQC7.js";
 export {
   AVATAR_PATH,
   BADGES,
