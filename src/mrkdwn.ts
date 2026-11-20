@@ -71,13 +71,29 @@ export function context(...elements: Array<string | Block>): Block {
   return { type: "context", elements: elements.map((e) => (typeof e === "string" ? mrkdwnText(e) : e)) };
 }
 
-/** An image block from a public URL, or (`{ slackFile }`) a file uploaded to Slack, by id. */
-export function image(src: string | { slackFile: string }, alt: string, title?: string): Block {
+/**
+ * An image block: from a public URL (`image_url`), or a file uploaded to Slack, by id (`{ slackFile }`) or by its
+ * `url_private` / permalink (`{ slackFileUrl }`). Edited in place, a URL image only refreshes under a new URL
+ * (`versionedUrl`), and a Slack file must be processed first (`upload` waits by default). Phone apps offer no Download
+ * on image blocks; attach the file (`Msg.files`) for that.
+ */
+export function image(src: string | { slackFile: string } | { slackFileUrl: string }, alt: string, title?: string): Block {
   const block: Block = { type: "image", alt_text: alt };
   if (typeof src === "string") block["image_url"] = src;
-  else block["slack_file"] = { id: src.slackFile };
+  else if ("slackFile" in src) block["slack_file"] = { id: src.slackFile };
+  else block["slack_file"] = { url: src.slackFileUrl };
   if (title) block["title"] = plainText(title);
   return block;
+}
+
+/**
+ * `url` with `v=<version>` set in its query: Slack caches an image block's picture by URL, so an edit that keeps the
+ * URL keeps showing the old image. Use a content hash or timestamp as the version (or sign the URL per version).
+ */
+export function versionedUrl(url: string, version: string | number, param = "v"): string {
+  const u = new URL(url);
+  u.searchParams.set(param, String(version));
+  return u.toString();
 }
 
 /** A `context` / `section`-accessory image element. */

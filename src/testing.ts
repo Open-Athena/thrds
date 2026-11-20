@@ -213,7 +213,9 @@ export function fakeChannel(
       const reads = (infoReads.get(file.id) ?? 0) + 1;
       infoReads.set(file.id, reads);
       if (reads > (options.processedAfter ?? 0)) file.mimetype = file.name.endsWith(".png") ? "image/png" : "application/octet-stream";
-      return { body: { ok: true, file: { id: file.id, name: file.name, title: file.title, mimetype: file.mimetype } } };
+      const info: Record<string, unknown> = { id: file.id, name: file.name, title: file.title, mimetype: file.mimetype };
+      if (file.mimetype.startsWith("image/")) info["thumb_64"] = `https://files.slack.com/thumb/${file.id}_64.png`;
+      return { body: { ok: true, file: info } };
     },
     "files.delete": ({ body }) => {
       const id = body["file"] as string;

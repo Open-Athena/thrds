@@ -35,12 +35,15 @@ export type {
   SlackMessage,
   SlackPostOptions,
   SlackSyncOptions,
+  FileSwap,
   SlackUser,
   UploadData,
   UploadOptions,
 } from "./slack";
 export {
   CHANNEL_TTL_MS,
+  FileNotProcessedError,
+  FileSwapError,
   FilesNotAttachedError,
   MAX_CACHED_USERS,
   NOT_FOUND_TTL_MS,
@@ -48,6 +51,10 @@ export {
   SlackClient,
   USERNAME_MAX,
   USER_TTL_MS,
+  definitelyNotAttached,
+  isProcessed,
+  swapFile,
+  toBytes,
   webClientTransport,
 } from "./slack";
 
@@ -68,6 +75,7 @@ export {
   header,
   image,
   imageElement,
+  versionedUrl,
   input,
   link,
   mention,
@@ -116,8 +124,10 @@ export type {
   SlotThread,
   SlotThreadSpec,
   UpsertOptions,
+  UpsertResult,
 } from "./slots";
 export {
+  FILE_HASH,
   LeaseLostError,
   REJECTED,
   SLOT_KEY,
@@ -130,4 +140,5 @@ export {
   tagSlot,
   threadStore,
   upsert,
+  upsertFile,
 } from "./slots";

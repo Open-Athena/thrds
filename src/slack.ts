@@ -22,6 +22,7 @@ import {
   paginate,
   slackCall,
   type CallOptions,
+  type RetryInfo,
   type SlackResponse,
   type TransportOptions,
 } from "./api";
@@ -129,8 +130,107 @@ export class FilesNotAttachedError extends Error {
   }
 }
 
+/** Slack hadn't processed an upload in time. An unshared one is deleted (`deleted`), since nothing can use it. */
+export class FileNotProcessedError extends Error {
+  constructor(
+    public readonly fileId: string,
+    public readonly waitedMs: number,
+    public readonly deleted: boolean,
+  ) {
+    super(`Slack hadn't processed file ${fileId} after ${waitedMs / 1000} s${deleted ? " (deleted it)" : ""}`);
+    this.name = "FileNotProcessedError";
+  }
+}
+
+/**
+ * Attaching a newly uploaded file failed (`cause`). If Slack definitely refused the write, the upload was deleted
+ * (`deleted`); otherwise the write may have landed, so the file is kept and `fileId` says which one it is.
+ */
+export class FileSwapError extends Error {
+  constructor(
+    public readonly fileId: string,
+    public readonly deleted: boolean,
+    options?: { cause?: unknown },
+  ) {
+    super(`attaching file ${fileId} failed (${deleted ? "deleted the upload" : "kept the upload: the write may have landed"})`, options);
+    this.name = "FileSwapError";
+  }
+}
+
+/** What a file swap did: the new file's id, and which replaced files were deleted (or couldn't be). */
+export interface FileSwap {
+  fileId: string;
+  deleted: string[];
+  /** Replaced files whose `files.delete` failed (other than already being gone): delete them later, or by hand. */
+  undeleted: Array<{ id: string; error: unknown }>;
+}
+
+/**
+ * Whether Slack has processed an upload (`files.info`'s `file`): it reports a `mimetype`, and an image has thumbnails
+ * (`thumb_*`), which it can lack for a moment after the `mimetype` appears (disky waited for both, and saw images render
+ * inline from the first view).
+ */
+export function isProcessed(file: Record<string, unknown>): boolean {
+  const mimetype = file["mimetype"];
+  if (typeof mimetype !== "string" || !mimetype) return false;
+  return !mimetype.startsWith("image/") || Object.keys(file).some((k) => /^thumb_\d+$/.test(k));
+}
+
 /** What `upload` sends: bytes, or a string as UTF-8. */
 export type UploadData = Uint8Array | ArrayBuffer | Blob | string;
+
+export async function toBytes(data: UploadData): Promise<Uint8Array> {
+  if (typeof data === "string") return new TextEncoder().encode(data);
+  if (data instanceof Blob) return new Uint8Array(await data.arrayBuffer());
+  if (data instanceof ArrayBuffer) return new Uint8Array(data);
+  return data;
+}
+
+/** Whether a failed write certainly didn't attach anything: Slack refused it, or refused the edit after a post. */
+export function definitelyNotAttached(e: unknown): boolean {
+  if (e instanceof SlackApiError) return e.definite;
+  if (e instanceof FilesNotAttachedError) return e.cause instanceof SlackApiError && e.cause.definite;
+  return false;
+}
+
+/**
+ * Upload a replacement, `write` it (an edit or upsert that attaches it), then delete the `previous` files it replaced.
+ * A write that fails deletes the new upload when Slack definitely refused it; either way it throws `FileSwapError`.
+ */
+export async function swapFile<T>(
+  client: Pick<SlackClient, "deleteFile">,
+  previous: readonly string[],
+  upload: () => Promise<string>,
+  write: (fileId: string) => Promise<T>,
+): Promise<FileSwap & { result: T }> {
+  const fileId = await upload();
+  let result: T;
+  try {
+    result = await write(fileId);
+  } catch (e) {
+    let deleted = false;
+    if (definitelyNotAttached(e)) {
+      try {
+        await client.deleteFile(fileId);
+        deleted = true;
+      } catch {
+        // Reported via `deleted: false` and the id.
+      }
+    }
+    throw new FileSwapError(fileId, deleted, { cause: e });
+  }
+  const swap: FileSwap & { result: T } = { fileId, deleted: [], undeleted: [], result };
+  for (const id of previous) {
+    if (id === fileId) continue;
+    try {
+      await client.deleteFile(id);
+      swap.deleted.push(id);
+    } catch (error) {
+      swap.undeleted.push({ id, error });
+    }
+  }
+  return swap;
+}
 
 export interface UploadOptions {
   /** Share the file into this channel, which posts a file message. Unshared by default. */
@@ -143,10 +243,11 @@ export interface UploadOptions {
   title?: string;
   altText?: string;
   /**
-   * Return only once Slack has processed the file (`files.info` reports its `mimetype`; needs `files:read`). On by
-   * default: an `image` block on an unprocessed file (`slack_file: {id}`) fails with `invalid_blocks`, and one attached
-   * with `files` first renders on phones as a generic file icon rather than inline. `true` polls every second for up
-   * to 30 s; `false` skips the wait. Throws a `timeout` `SlackApiError` when time runs out.
+   * Return only once Slack has processed the file (`isProcessed`: a `mimetype`, and thumbnails for an image; needs
+   * `files:read`). On by default: an `image` block on an unprocessed file (`slack_file: {id}`) fails with
+   * `invalid_blocks`, and one attached with `files` first renders on phones as a generic file icon rather than inline.
+   * Processing took ~0.5 s for a 12 KB PNG and ~4.6 s for 3 MB (disky, 2026-11). `true` polls every 0.5 s for up to
+   * 30 s; `false` skips the wait. Past the limit it throws `FileNotProcessedError`, deleting the file if it's unshared.
    */
   processed?: boolean | { timeoutMs?: number; intervalMs?: number };
 }
@@ -591,32 +692,12 @@ export class SlackClient implements ThreadClient {
    * unless `channel` is given: attach it to a message with `Msg.files`, or reference it from an `image` block.
    */
   async upload(name: string, data: UploadData, options: UploadOptions = {}): Promise<string> {
-    const bytes =
-      typeof data === "string"
-        ? new TextEncoder().encode(data)
-        : data instanceof Blob
-          ? new Uint8Array(await data.arrayBuffer())
-          : data instanceof ArrayBuffer
-            ? new Uint8Array(data)
-            : data;
+    const bytes = await toBytes(data);
     const request: Record<string, unknown> = { filename: name, length: bytes.byteLength };
     if (options.altText !== undefined) request["alt_txt"] = options.altText;
     const target = await this.api("files.getUploadURLExternal", request, { form: true });
     const id = target["file_id"] as string;
-    const { fetch: fetchImpl = globalThis.fetch, timeoutMs = 30_000 } = this.options;
-    let response: Response;
-    try {
-      response = await fetchImpl(target["upload_url"] as string, {
-        method: "POST",
-        body: bytes as Uint8Array<ArrayBuffer>,
-        ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
-      });
-    } catch (e) {
-      if (e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError")) throw new SlackApiError("upload_url", "timeout", 0);
-      throw new SlackApiError("upload_url", "transport_error", 0, undefined, undefined, "transport", { cause: e });
-    }
-    await response.text();
-    if (!response.ok) throw new SlackApiError("upload_url", `http_${response.status}`, response.status);
+    await this.sendUpload(target["upload_url"] as string, bytes);
     const done: Record<string, unknown> = { files: [{ id, title: options.title ?? name }] };
     if (options.channel !== undefined) {
       done["channel_id"] = options.channel;
@@ -626,16 +707,92 @@ export class SlackClient implements ThreadClient {
     await this.api("files.completeUploadExternal", done);
     const processed = options.processed ?? true;
     if (processed) {
-      const { timeoutMs: limit = 30_000, intervalMs = 1000 } = processed === true ? {} : processed;
+      const { timeoutMs: limit = 30_000, intervalMs = 500 } = processed === true ? {} : processed;
       const start = this.now();
-      for (;;) {
-        const file = await this.fileInfo(id);
-        if (file["mimetype"]) break;
-        if (this.now() - start + intervalMs > limit) throw new SlackApiError("files.info", "timeout", 0, file);
+      // Bounded by polls as well as time, so a clock that doesn't advance (a test's no-op `sleep`) can't spin forever.
+      const maxPolls = Math.floor(limit / intervalMs) + 1;
+      for (let poll = 1; ; poll++) {
+        if (isProcessed(await this.fileInfo(id))) break;
+        if (poll >= maxPolls || this.now() - start + intervalMs > limit) {
+          let deleted = false;
+          if (options.channel === undefined) {
+            try {
+              await this.deleteFile(id);
+              deleted = true;
+            } catch {
+              // Reported via `deleted: false`.
+            }
+          }
+          throw new FileNotProcessedError(id, this.now() - start, deleted);
+        }
         await (this.options.sleep ?? sleep)(intervalMs);
       }
     }
     return id;
+  }
+
+  /**
+   * POST an upload's bytes to its `upload_url`, retrying (like `slackCall`, up to `retries`, exponential from 1 s, or
+   * `Retry-After`) on a 429, a 5xx, a timeout or a dropped connection. That's safe: until `completeUploadExternal`,
+   * a re-sent body just replaces the last one.
+   */
+  private async sendUpload(url: string, bytes: Uint8Array): Promise<void> {
+    const { fetch: fetchImpl = globalThis.fetch, timeoutMs = 30_000, retries = 3, maxRetryWaitMs, onRetry } = this.options;
+    const wait = this.options.sleep ?? sleep;
+    for (let attempt = 0; ; attempt++) {
+      let failure: SlackApiError;
+      let waitMs = 1000 * 2 ** attempt;
+      let reason: RetryInfo["reason"];
+      try {
+        const response = await fetchImpl(url, {
+          method: "POST",
+          body: bytes as Uint8Array<ArrayBuffer>,
+          ...(timeoutMs > 0 ? { signal: AbortSignal.timeout(timeoutMs) } : {}),
+        });
+        await response.text();
+        if (response.ok) return;
+        failure = new SlackApiError("upload_url", `http_${response.status}`, response.status);
+        if (response.status === 429) {
+          const after = Number(response.headers.get("Retry-After"));
+          if (Number.isFinite(after) && after >= 0) waitMs = after * 1000;
+          reason = "http_429";
+        } else if (response.status >= 500) reason = "server_error";
+        else throw failure;
+      } catch (e) {
+        if (e instanceof SlackApiError) throw e;
+        const timedOut = e instanceof Error && (e.name === "TimeoutError" || e.name === "AbortError");
+        failure = timedOut
+          ? new SlackApiError("upload_url", "timeout", 0)
+          : new SlackApiError("upload_url", "transport_error", 0, undefined, undefined, "transport", { cause: e });
+        reason = timedOut ? "timeout" : "transport";
+      }
+      if (attempt >= retries || (maxRetryWaitMs !== undefined && waitMs > maxRetryWaitMs)) throw failure;
+      onRetry?.({ method: "upload_url", attempt: attempt + 1, waitMs, reason });
+      await wait(waitMs);
+    }
+  }
+
+  /**
+   * Swap the file attached to message `ts`: upload `file`, edit the message to `m` with only the new file attached,
+   * then delete the files it had. The previous files are read from the message (a history scope), unless `previous`
+   * is given. See `swapFile` for failures; `upsertFile` is the stored-state version.
+   */
+  async replaceFile(
+    ts: string,
+    file: { name: string; data: UploadData } & UploadOptions,
+    m: MsgLike,
+    options: { previous?: string[] } = {},
+  ): Promise<FileSwap> {
+    const previous =
+      options.previous ?? ((await this.message(ts))?.files ?? []).map((f) => f["id"]).filter((id): id is string => typeof id === "string");
+    const { name, data, ...uploadOptions } = file;
+    const { result: _result, ...swap } = await swapFile(
+      this,
+      previous,
+      () => this.upload(name, data, uploadOptions),
+      (id) => this.edit(ts, { ...toMsg(m), files: [id] }),
+    );
+    return swap;
   }
 
   /** A file's `files.info` record (`mimetype`, `name`, `shares`, `url_private`, …). */

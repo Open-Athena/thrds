@@ -57,7 +57,8 @@ export interface RetryInfo {
   /** 1-based: the retry about to happen. */
   attempt: number;
   waitMs: number;
-  reason: "http_429" | "ratelimited" | "server_error" | "timeout";
+  /** `transport`: a dropped connection (only retried for an upload's bytes, which are safe to re-send). */
+  reason: "http_429" | "ratelimited" | "server_error" | "timeout" | "transport";
 }
 
 /**

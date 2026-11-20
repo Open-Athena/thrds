@@ -85,27 +85,67 @@ await slack.post({ text: "Ann submitted their update", blocks: [section("*Did:* 
 
 Senders are fixed when a message is posted: `chat.update` ignores `username` / `icon_url`, so an edit keeps the original sender. `delete` refuses to orphan thread replies; that check needs a history scope on the deleting token.
 
-### Files
+### Editable images
+
+A bot that keeps one message current (an hourly status card, a leaderboard) can show an image in it two ways. Both are edited in place: same `ts`, no new notification.
+
+| | Attached file (`Msg.files`) | Image block (`image(…)`) |
+|---|---|---|
+| Download / Save on Slack's phone apps | **Yes** | No |
+| Where it sits | Below all of the message's blocks | Wherever you put the block |
+| Source | An uploaded file (`upload`) | A public URL (`image_url`), or an uploaded file (`slack_file` by id or URL) |
+| To change it | Attach a new file (`file_ids`), then delete the old one | A new URL (`versionedUrl`: Slack caches by URL), or another file |
+| Before Slack has processed an upload | Renders as a generic file icon at first | `invalid_blocks` |
+
+Choose the attached file when people should be able to save the image, and an image block when it has to sit between other blocks or already lives at a public URL.
+
+**An attached file, kept current.** `upsertFile` does the hourly pattern in one call:
+1. It uploads the bytes and waits until Slack has processed them.
+2. It `upsert`s the message with only that file attached.
+3. It deletes the file it replaced. The store's slot record lists the attached files.
+
+If the bytes and the message are unchanged, it uploads nothing and the upsert skips.
 
 ```ts
-// An hourly card whose image phone users can download: swap the attached file in place, then drop the old one.
-const file = await slack.upload("fleet.png", png);
-const prev = (await slack.message(ts))?.files?.[0]?.["id"] as string | undefined;
-await slack.edit(ts, { text: "Fleet status", blocks, files: [file] });
-if (prev) await slack.deleteFile(prev);
+import { upsertFile } from "@open-athena/thrds";
+
+const r = await upsertFile(slack, store, "fleet-card", { text: "Fleet status", blocks }, { name: "fleet.png", data: png });
+// r: { status, ts, action: "POST" | "EDIT" | "SKIP" | …, fileId, deleted: ["F…"], undeleted: [] }
 ```
 
-- `upload(name, bytes | string | Blob, opts)` → file id. Unshared unless `opts.channel` (with `initialComment`, `threadTs`), which posts a file message. It waits until Slack has processed the file (`files.info` reports a `mimetype`; polls every 1 s, up to 30 s, `processed: false` to skip). Attached before then, a file first renders on phones as a generic file icon instead of inline.
-- `Msg.files`: file ids attached below the message, sent as `chat.update` `file_ids`. On an edit, they replace the message's files. Omitting `files` leaves them as they were, and `[]` detaches them; a detached file still exists until `deleteFile`. `chat.postMessage` takes no `file_ids`, so `post` with files posts first, then attaches them with an edit. If that edit fails it throws `FilesNotAttachedError` (with the `ts`), and the message stays stamped without the files, so `sync` / `upsert` attach them on their next run. Files count toward the content hash.
-- `deleteFile(id)` (`files.delete`): a file that's already gone is fine. `fileInfo(id)` (`files.info`).
-- Scopes: `files:write`, and `files:read` for `fileInfo` and the processing wait.
+Without a store, `slack.replaceFile(ts, { name, data }, msg)` does the same against a message by `ts`. It reads the previous files from the message (a history scope), or takes them as `{ previous }`.
+
+No orphaned files:
+- **The previous file** is deleted only after the write succeeds. One that's already gone is fine, and other delete failures come back in `undeleted` rather than throwing.
+- **A write Slack definitely refused** deletes the new upload, then throws `FileSwapError` (`fileId`, `deleted: true`).
+- **A write that may have landed** (a timeout or 5xx) keeps the upload and throws `FileSwapError` with `deleted: false` and the id.
+- **An unshared upload that never finishes processing** is deleted, and `upload` throws `FileNotProcessedError` (`fileId`, `waitedMs`, `deleted`).
+
+The pieces:
+- **`upload(name, bytes | string | Blob, opts)`** returns a file id.
+  - It's unshared unless `opts.channel` is given (with `initialComment` / `threadTs`); sharing posts a file message.
+  - It waits until Slack has processed the file (`isProcessed`: a `mimetype`, and `thumb_*` for an image). It polls `files.info` every 0.5 s for up to 30 s; `processed: { timeoutMs, intervalMs }` changes that, and `processed: false` skips it.
+  - The bytes POST is retried like other calls (429 / 5xx / timeout / dropped connection, up to `retries`). That's safe because nothing exists until `completeUploadExternal`.
+- **`Msg.files`**: file ids attached below the message, sent as `chat.update` `file_ids`.
+  - On an edit they replace the message's files. Omitting `files` leaves them as they were; `[]` detaches them. A detached file still exists until `deleteFile`.
+  - `chat.postMessage` takes no `file_ids`, so `post` with files posts first, then attaches by edit. If that edit fails, it throws `FilesNotAttachedError` (`ts`). The message is stamped without the files, so `sync` / `upsert` attach them on their next run.
+  - Files count toward the content hash.
+- **`deleteFile(id)`**: a file that's already gone is fine. Also `fileInfo(id)`, and `swapFile(client, previous, upload, write)` for your own write step.
+- **`image(url | { slackFile } | { slackFileUrl }, alt, title?)`** builds an image block. `versionedUrl(url, version)` sets `?v=`; use a content hash or timestamp. A signed URL that changes per version works the same way.
+- **Scopes:** `files:write`, `files:read` (the processing wait, `fileInfo`), and a history scope for `replaceFile` without `previous`.
 
 What Slack does (tested by disky in a DM, 2026-11; [spec][file-replace]):
-- Every edit kept the message in place: same `ts`, marked `(edited)`, no new notification.
-- **Only an attached file offers Download / Save on Slack's phone apps.** An `image` block doesn't, whether it points at a URL or at an uploaded file (`slack_file: {id}` or `{url}`).
-- Swapping `file_ids` replaces the attached file. That works on a file message and on a plain blocks message, where the file shows below the blocks. Deleting the replaced file afterwards leaves the new one showing.
-- Until Slack has processed an upload (`files.info` `mimetype` is `""` until then), an `image` block on it fails with `invalid_blocks`, and attaching it renders a generic file icon at first; once processed it shows large and inline, with Download. `upload` waits for processing by default.
-- A message created by the upload itself and a plain post with the file attached by edit render the same.
+- **Processing:** `files.info` shows `mimetype: ""` until Slack has processed an upload.
+  - It took about 0.5 s for a 12 KB PNG, 0.6 s for 197 KB and 4.6 s for 3 MB. Time scales with bytes more than pixels.
+  - Slack's docs say there's "no need to wait" after `completeUploadExternal`, but an image block on an unprocessed file fails with `invalid_blocks`, and an attached one first renders as a generic file icon.
+  - Once processed, an attached image shows large and inline with Download. That holds however the message was created: a plain post, a blocks post, or a message created by the upload.
+- **`file_ids`:** swapping them replaces the attached file. Deleting the replaced file afterwards leaves the new one showing. An edit without `file_ids` keeps the files; `file_ids: []` detaches them, and the file survives.
+- **What viewers see:**
+  - An edit triggers no new notification.
+  - `(edited)` shows on a plain-text body, but not under section blocks.
+  - Image blocks offer no Download on Android, whether they point at a URL or at a Slack file (`slack_file: {id}` or `{url}`).
+- **Events:** polling `files.info` is the supported way to wait. Slack's `file_change` event ("any property of a file is changed", `files:read`) might announce processing, but that's untested: the test app has no Events API subscription.
+- **Not tested:** what a message shows when a file that's still attached gets deleted.
 
 ### Declarative sync
 

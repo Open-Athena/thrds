@@ -12,13 +12,20 @@
  */
 import { SlackApiError } from "./api";
 import { THRDS_HASH, msgHash, toMsg, type Message, type Msg, type MsgLike } from "./core";
-import type { SlackMessage } from "./slack";
+import { hash53Bytes } from "./hash";
+import { swapFile, toBytes, type FileSwap, type SlackClient, type SlackMessage, type UploadData, type UploadOptions } from "./slack";
 
 /** Where a slot's message lives, and a hash of what was last sent there (`""`: unknown, so the next run edits once). */
 export interface SlotRecord {
   ts: string;
   hash: string;
+  /** The file ids attached to the message (`Msg.files`), so a later run can delete the ones it replaces. */
+  files?: string[];
 }
+
+/** A record, with `files` only when there are some. */
+const slotRecord = (ts: string, hash: string, files: string[] | undefined): SlotRecord =>
+  files !== undefined && files.length > 0 ? { ts, hash, files } : { ts, hash };
 
 export interface SlotState {
   /** The channel the thread lives in. A run in a different channel starts a new thread there. */
@@ -335,7 +342,7 @@ export async function syncSlots(
         await save();
         ts = (await client.post(sent, threadTs)).id;
       }
-      record(slot, { ts, hash: msgHash(sent) });
+      record(slot, slotRecord(ts, msgHash(sent), sent.files));
       delete state.pending;
       await save();
       return { ts, fell: sent !== msg };
@@ -378,6 +385,7 @@ export async function syncSlots(
         return { ts: target.ts, reposted: false };
       }
       let sentHash = hash;
+      let sentFiles = msg.files;
       let fell = false;
       try {
         await beforeWrite();
@@ -388,6 +396,7 @@ export async function syncSlots(
           const fb = tagSlot(mode.fallback, key, slot);
           await client.edit(target.ts, fb);
           sentHash = msgHash(fb);
+          sentFiles = fb.files;
           fell = true;
         }
       } catch (e) {
@@ -406,7 +415,8 @@ export async function syncSlots(
         actions.push({ type: refell ? "FALLBACK" : "REPOST", slot, ts });
         return { ts, reposted: true };
       }
-      record(slot, { ts: target.ts, hash: sentHash });
+      // An edit without `files` leaves the attached ones in place.
+      record(slot, slotRecord(target.ts, sentHash, sentFiles ?? current?.files));
       state.channel = client.channel;
       // An edit needs no write-ahead: a lost hash only means one more edit next run.
       unsaved = true;
@@ -548,6 +558,56 @@ export async function upsert(
   const parent: SlotParent = ts !== undefined ? { ts, msg } : msg;
   const result = await syncSlots(client, store, { key, parent }, rest);
   return { status: result.status, ts: result.ts, action: result.actions.at(-1)?.type ?? null };
+}
+
+/** The `metadata.event_payload` field `upsertFile` stamps the attached file's content hash into. */
+export const FILE_HASH = "thrds_file";
+
+export type UpsertResult = Awaited<ReturnType<typeof upsert>>;
+
+/**
+ * One message kept in place under `key` with one attached file (`Msg.files`), e.g. an hourly status card whose image
+ * phone users can download. Each run uploads `file`, upserts `msg` with it attached, then deletes the file it replaced
+ * (the store's record lists the attached files). If the bytes and the message are what's already there, nothing is
+ * uploaded and the upsert skips. A failed write deletes the new upload when Slack definitely refused it, and throws
+ * `FileSwapError` (with the upload's id) either way. `fileId` is null only when nothing was posted (`create: false`).
+ */
+export async function upsertFile(
+  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">,
+  store: SlotStore,
+  key: string,
+  msg: MsgLike,
+  file: { name: string; data: UploadData } & UploadOptions,
+  options: UpsertOptions = {},
+): Promise<UpsertResult & Omit<FileSwap, "fileId"> & { fileId: string | null }> {
+  const { name, data, ...uploadOptions } = file;
+  const bytes = await toBytes(data);
+  const base = toMsg(msg);
+  const withFile = (files: string[]): Msg => ({
+    ...base,
+    files,
+    metadata: {
+      event_type: base.metadata?.event_type ?? "thrds_slot",
+      event_payload: { ...base.metadata?.event_payload, [FILE_HASH]: hash53Bytes(bytes) },
+    },
+  });
+  const record = (await store.get(key))?.parent;
+  const previous = record?.files ?? [];
+  const none = { deleted: [], undeleted: [] };
+  if (record === undefined && options.create === false && options.ts === undefined) {
+    return { ...(await upsert(client, store, key, base, options)), fileId: null, ...none };
+  }
+  // The same bytes and message as last time: keep the attached file, so nothing is uploaded and the upsert skips.
+  if (!options.force && previous.length === 1 && record !== undefined && msgHash(tagSlot(withFile(previous), key, null)) === record.hash) {
+    return { ...(await upsert(client, store, key, withFile(previous), options)), fileId: previous[0]!, ...none };
+  }
+  const { result, ...swap } = await swapFile(
+    client,
+    previous,
+    () => client.upload(name, bytes, uploadOptions),
+    (id) => upsert(client, store, key, withFile([id]), options),
+  );
+  return { ...result, ...swap };
 }
 
 /** Seed a store with messages posted before thrds managed them (hash unknown: each is edited once on the next run). */
