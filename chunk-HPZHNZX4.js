@@ -276,6 +276,32 @@ var FilesNotAttachedError = class extends Error {
   }
   ts;
 };
+var CustomSenderFilesError = class extends Error {
+  constructor(override, ts) {
+    super(
+      `Slack won't attach files to ${ts === void 0 ? "a message" : `message ${ts}`} with a sender override${override === void 0 ? "" : ` (${override})`}: chat.update returns ok, but the message shows no files. Post it without \`username\` / \`iconEmoji\` / \`iconUrl\``
+    );
+    this.override = override;
+    this.ts = ts;
+    this.name = "CustomSenderFilesError";
+  }
+  override;
+  ts;
+};
+function assertFilesAttachable(sender, target) {
+  const override = sender.username !== void 0 ? `username "${sender.username}"` : sender.iconEmoji !== void 0 ? `icon_emoji "${sender.iconEmoji}"` : sender.iconUrl !== void 0 ? "icon_url" : void 0;
+  if (override !== void 0) throw new CustomSenderFilesError(override);
+  if (target?.subtype === "bot_message") {
+    throw new CustomSenderFilesError(target.username === void 0 ? void 0 : `username "${target.username}"`, target.id);
+  }
+}
+function senderOverrides(msg, client) {
+  return {
+    username: msg.username ?? client.username,
+    iconUrl: msg.iconUrl ?? client.iconUrl,
+    iconEmoji: msg.iconEmoji ?? client.iconEmoji
+  };
+}
 var FileNotProcessedError = class extends Error {
   constructor(fileId, waitedMs, deleted) {
     super(`Slack hadn't processed file ${fileId} after ${waitedMs / 1e3} s${deleted ? " (deleted it)" : ""}`);
@@ -318,7 +344,8 @@ async function toBytes(data) {
 }
 function definitelyNotAttached(e) {
   if (e instanceof SlackApiError) return e.definite;
-  if (e instanceof FilesNotAttachedError) return e.cause instanceof SlackApiError && e.cause.definite;
+  if (e instanceof CustomSenderFilesError) return true;
+  if (e instanceof FilesNotAttachedError) return definitelyNotAttached(e.cause);
   return false;
 }
 async function swapFiles(client, previous, desired, write, options = {}) {
@@ -651,12 +678,15 @@ var SlackClient = class _SlackClient {
   }
   /**
    * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
-   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`. Files with a
+   * sender override (`username`, `iconEmoji`, `iconUrl`) throw `CustomSenderFilesError` before posting (Slack
+   * wouldn't show them).
    */
   async post(m, threadId) {
     const msg = toMsg(m);
     const { files, ...bare } = msg;
     const attach = files !== void 0 && files.length > 0;
+    if (attach) assertFilesAttachable(senderOverrides(msg, this));
     const data = this.body(attach ? bare : msg);
     const username = msg.username ?? this.username;
     const iconUrl = msg.iconUrl ?? this.iconUrl;
@@ -684,12 +714,26 @@ var SlackClient = class _SlackClient {
    * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
    * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
    * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
+   *
+   * Attaching files from a client (or `msg`) with a sender override throws `CustomSenderFilesError` before writing:
+   * that client's posts carry the override, and Slack shows no files on those. Edit with a client without one
+   * (`with`). Otherwise the update's response is checked: if its `message` is a `bot_message`, or lists files without
+   * all of the new ones, the edit landed but the files didn't, and this throws `CustomSenderFilesError` (with `ts`).
    */
   async edit(messageId, m) {
     const msg = toMsg(m);
+    const attach = msg.files !== void 0 && msg.files.length > 0;
+    if (attach) assertFilesAttachable(senderOverrides(msg, this));
     const data = { ...this.body(msg), ts: messageId };
     if (msg.files !== void 0) data["file_ids"] = msg.files;
-    await this.api("chat.update", data);
+    const result = await this.api("chat.update", data);
+    if (attach) {
+      const echoed = result["message"];
+      const shown = echoed?.files === void 0 ? void 0 : new Set(echoed.files.map((f) => f.id));
+      if (echoed?.subtype === "bot_message" || shown !== void 0 && !msg.files.every((id) => shown.has(id))) {
+        throw new CustomSenderFilesError(echoed?.username === void 0 ? void 0 : `username "${echoed.username}"`, messageId);
+      }
+    }
     return this.sent(messageId, msg);
   }
   /**
@@ -777,9 +821,15 @@ var SlackClient = class _SlackClient {
    * longer has are deleted. The previous files (and their content hashes, from the message's metadata) are read from
    * the message (a history scope), unless `previous` is given. See `swapFiles` for failures; `upsertFiles` is the
    * stored-state version.
+   *
+   * A message with a sender override (`bot_message`, when it was read) or a client with one throws
+   * `CustomSenderFilesError` before uploading anything. One only the update's response reveals throws it after,
+   * having deleted this run's uploads.
    */
   async replaceFiles(ts, files, m, options = {}) {
-    const previous = options.previous ?? attachedFiles(await this.message(ts));
+    const target = options.previous === void 0 ? await this.message(ts) : void 0;
+    if (files.length > 0) assertFilesAttachable(senderOverrides(toMsg(m), this), target);
+    const previous = options.previous ?? attachedFiles(target ?? null);
     const desired = await Promise.all(
       files.map(async ({ name, data, ...uploadOptions }) => {
         const bytes = await toBytes(data);
@@ -1172,6 +1222,9 @@ export {
   CHANNEL_TTL_MS,
   webClientTransport,
   FilesNotAttachedError,
+  CustomSenderFilesError,
+  assertFilesAttachable,
+  senderOverrides,
   FileNotProcessedError,
   FileSwapError,
   FILE_HASHES,
@@ -1183,4 +1236,4 @@ export {
   withFiles,
   SlackClient
 };
-//# sourceMappingURL=chunk-33PDEAXS.js.map
+//# sourceMappingURL=chunk-HPZHNZX4.js.map

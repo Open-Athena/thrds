@@ -201,6 +201,38 @@ declare class FilesNotAttachedError extends Error {
         cause?: unknown;
     });
 }
+/**
+ * Slack doesn't attach files to a message with a sender override (`username`, `icon_emoji` or `icon_url`, which make
+ * its subtype `bot_message`). `chat.update` with `file_ids` returns ok, and `files.info` records a share at the
+ * message's ts, but the update's own `message.files` is `[]`, and history and clients show no files.
+ * `chat.postMessage` with `file_ids` is just as silent, and thread replies make no difference (disky and gcs,
+ * 2026-11-20). So thrds refuses before writing (or uploading) when it knows of an override, and checks the update's
+ * response otherwise: post and edit the message from a client without sender overrides.
+ */
+declare class CustomSenderFilesError extends Error {
+    /** The override, e.g. `username "cw"` (when known). */
+    readonly override: string | undefined;
+    /** The message, when it already exists. */
+    readonly ts?: string | undefined;
+    constructor(
+    /** The override, e.g. `username "cw"` (when known). */
+    override: string | undefined, 
+    /** The message, when it already exists. */
+    ts?: string | undefined);
+}
+/** A message's sender overrides, as `chat.postMessage` would send them. */
+interface SenderOverrides {
+    username?: string | undefined;
+    iconUrl?: string | undefined;
+    iconEmoji?: string | undefined;
+}
+/**
+ * Throws `CustomSenderFilesError` when files can't be attached: the message would be sent with a sender override, or
+ * (`target`, as read back) is a `bot_message`.
+ */
+declare function assertFilesAttachable(sender: SenderOverrides, target?: Pick<SlackMessage, "id" | "subtype" | "username"> | null): void;
+/** `msg`'s sender overrides, falling back to `client`'s. */
+declare function senderOverrides(msg: Msg, client: SenderOverrides): SenderOverrides;
 /** Slack hadn't processed an upload in time. An unshared one is deleted (`deleted`), since nothing can use it. */
 declare class FileNotProcessedError extends Error {
     readonly fileId: string;
@@ -261,7 +293,10 @@ declare function isProcessed(file: Record<string, unknown>): boolean;
 /** What `upload` sends: bytes, or a string as UTF-8. */
 type UploadData = Uint8Array | ArrayBuffer | Blob | string;
 declare function toBytes(data: UploadData): Promise<Uint8Array>;
-/** Whether a failed write certainly didn't attach anything: Slack refused it, or refused the edit after a post. */
+/**
+ * Whether a failed write certainly didn't attach anything: Slack refused it (or refused the edit after a post), or it
+ * landed on a message that shows no files (`CustomSenderFilesError`).
+ */
 declare function definitelyNotAttached(e: unknown): boolean;
 /**
  * Attach `desired` files in place of `previous` ones:
@@ -458,13 +493,20 @@ declare class SlackClient implements ThreadClient {
     private sent;
     /**
      * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
-     * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+     * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`. Files with a
+     * sender override (`username`, `iconEmoji`, `iconUrl`) throw `CustomSenderFilesError` before posting (Slack
+     * wouldn't show them).
      */
     post(m: MsgLike, threadId?: string): Promise<Message>;
     /**
      * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
      * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
      * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
+     *
+     * Attaching files from a client (or `msg`) with a sender override throws `CustomSenderFilesError` before writing:
+     * that client's posts carry the override, and Slack shows no files on those. Edit with a client without one
+     * (`with`). Otherwise the update's response is checked: if its `message` is a `bot_message`, or lists files without
+     * all of the new ones, the edit landed but the files didn't, and this throws `CustomSenderFilesError` (with `ts`).
      */
     edit(messageId: string, m: MsgLike): Promise<Message>;
     /**
@@ -484,6 +526,10 @@ declare class SlackClient implements ThreadClient {
      * longer has are deleted. The previous files (and their content hashes, from the message's metadata) are read from
      * the message (a history scope), unless `previous` is given. See `swapFiles` for failures; `upsertFiles` is the
      * stored-state version.
+     *
+     * A message with a sender override (`bot_message`, when it was read) or a client with one throws
+     * `CustomSenderFilesError` before uploading anything. One only the update's response reveals throws it after,
+     * having deleted this run's uploads.
      */
     replaceFiles(ts: string, files: readonly FileSpec[], m: MsgLike, options?: {
         previous?: AttachedFile[];
@@ -586,4 +632,4 @@ declare class SlackClient implements ThreadClient {
     }): Promise<LinkedSyncResult>;
 }
 
-export { type AttachedFile as A, type BulletFn as B, CHANNEL_TTL_MS as C, type UploadOptions as D, attachedFiles as E, FILE_HASHES as F, buildDetailMessages as G, buildSummaryMessages as H, collect as I, defaultBullet as J, definitelyNotAttached as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, isProcessed as O, paginate as P, slackApi as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, slackCall as V, splitBody as W, swapFiles as X, toBytes as Y, webClientTransport as Z, withFiles as _, type Auth as a, type CallOptions as b, FileNotProcessedError as c, type FileSpec as d, type FileSwap as e, FileSwapError as f, FilesNotAttachedError as g, type FilesSwap as h, type LinkedThread as i, NOT_FOUND_TTL_MS as j, type RetryInfo as k, SLACK_MESSAGE_LIMIT as l, type Section as m, SlackApiError as n, SlackClient as o, type SlackClientOptions as p, type SlackDeleteOptions as q, type SlackErrorKind as r, type SlackMessage as s, type SlackPostOptions as t, type SlackResponse as u, type SlackSyncOptions as v, type SlackUser as w, type TransportOptions as x, USER_TTL_MS as y, type UploadData as z };
+export { swapFiles as $, type AttachedFile as A, type BulletFn as B, CHANNEL_TTL_MS as C, USER_TTL_MS as D, type UploadData as E, FILE_HASHES as F, type UploadOptions as G, assertFilesAttachable as H, attachedFiles as I, buildDetailMessages as J, buildSummaryMessages as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, collect as O, defaultBullet as P, definitelyNotAttached as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, isProcessed as V, paginate as W, senderOverrides as X, slackApi as Y, slackCall as Z, splitBody as _, type Auth as a, toBytes as a0, webClientTransport as a1, withFiles as a2, type CallOptions as b, CustomSenderFilesError as c, FileNotProcessedError as d, type FileSpec as e, type FileSwap as f, FileSwapError as g, FilesNotAttachedError as h, type FilesSwap as i, type LinkedThread as j, NOT_FOUND_TTL_MS as k, type RetryInfo as l, SLACK_MESSAGE_LIMIT as m, type Section as n, type SenderOverrides as o, SlackApiError as p, SlackClient as q, type SlackClientOptions as r, type SlackDeleteOptions as s, type SlackErrorKind as t, type SlackMessage as u, type SlackPostOptions as v, type SlackResponse as w, type SlackSyncOptions as x, type SlackUser as y, type TransportOptions as z };

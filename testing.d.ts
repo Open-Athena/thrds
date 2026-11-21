@@ -1,4 +1,4 @@
-import { p as SlackClientOptions, o as SlackClient } from './slack-8iIIb99E.js';
+import { r as SlackClientOptions, q as SlackClient } from './slack-DsYQB40e.js';
 import './core-BNb_OG-w.js';
 
 /**
@@ -57,6 +57,8 @@ interface FakeMessage {
     bot_id?: string;
     user?: string;
     username?: string;
+    /** `bot_message` for a post with a `username` override. */
+    subtype?: string;
     blocks?: unknown[];
     metadata?: {
         event_type: string;

@@ -1,6 +1,6 @@
 import {
   SlackClient
-} from "./chunk-33PDEAXS.js";
+} from "./chunk-HPZHNZX4.js";
 import "./chunk-OY4HFIJO.js";
 import "./chunk-3ZH5IQC7.js";
 
@@ -59,6 +59,7 @@ function fakeChannel(options = {}) {
       const m = { ts, text: body["text"], bot_id: "B_BOT" };
       if (body["thread_ts"]) m.thread_ts = body["thread_ts"];
       if (body["username"]) m.username = body["username"];
+      if (body["username"] || body["icon_url"] || body["icon_emoji"]) m.subtype = "bot_message";
       if (body["blocks"]) m.blocks = body["blocks"];
       if (body["metadata"]) m.metadata = body["metadata"];
       messages.push(m);
@@ -75,11 +76,16 @@ function fakeChannel(options = {}) {
         const ids = body["file_ids"];
         const missing = ids.find((id) => !files.has(id));
         if (missing !== void 0) return err("file_not_found");
-        if (ids.length > 0) m.files = ids.map((id) => ({ id, name: files.get(id).name }));
+        if (m.subtype === "bot_message") delete m.files;
+        else if (ids.length > 0) m.files = ids.map((id) => ({ id, name: files.get(id).name }));
         else delete m.files;
       }
       writes.push(["edit", m.text]);
-      return { body: { ok: true, ts: m.ts } };
+      const echoed = { ts: m.ts, text: m.text };
+      if (m.subtype) echoed["subtype"] = m.subtype;
+      if (m.username) echoed["username"] = m.username;
+      if (body["file_ids"] !== void 0) echoed["files"] = m.files ?? [];
+      return { body: { ok: true, ts: m.ts, message: echoed } };
     },
     "chat.delete": ({ body }) => {
       const i = messages.findIndex((x) => x.ts === body["ts"]);

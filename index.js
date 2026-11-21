@@ -1,5 +1,6 @@
 import {
   CHANNEL_TTL_MS,
+  CustomSenderFilesError,
   FILE_HASHES,
   FileNotProcessedError,
   FileSwapError,
@@ -13,6 +14,7 @@ import {
   SlackClient,
   USERNAME_MAX,
   USER_TTL_MS,
+  assertFilesAttachable,
   attachedFiles,
   buildDetailMessages,
   buildSummaryMessages,
@@ -21,6 +23,7 @@ import {
   definitelyNotAttached,
   isProcessed,
   paginate,
+  senderOverrides,
   slackApi,
   slackCall,
   splitBody,
@@ -28,7 +31,7 @@ import {
   toBytes,
   webClientTransport,
   withFiles
-} from "./chunk-33PDEAXS.js";
+} from "./chunk-HPZHNZX4.js";
 import {
   EditRateLimited,
   OrphanedRepliesError,
@@ -627,6 +630,7 @@ async function upsert(client, store, key, msg, options = {}) {
   return { status: result.status, ts: result.ts, action: result.actions.at(-1)?.type ?? null };
 }
 async function upsertFiles(client, store, key, msg, files, options = {}) {
+  if (files.length > 0) assertFilesAttachable(senderOverrides(toMsg(msg), client));
   const { concurrency, ...upsertOptions } = options;
   const record = (await store.get(key))?.parent;
   if (record === void 0 && options.create === false && options.ts === void 0) {
@@ -745,6 +749,7 @@ function threadStore(client, threadTs) {
 }
 export {
   CHANNEL_TTL_MS,
+  CustomSenderFilesError,
   EditRateLimited,
   FILE_HASHES,
   FileNotProcessedError,
@@ -767,6 +772,7 @@ export {
   USERNAME_MAX,
   USER_TTL_MS,
   actions,
+  assertFilesAttachable,
   attachedFiles,
   bound,
   buildDetailMessages,
@@ -809,6 +815,7 @@ export {
   plainTextInput,
   rich,
   section,
+  senderOverrides,
   slackApi,
   slackCall,
   splitBody,

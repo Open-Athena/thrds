@@ -1,7 +1,7 @@
 import { AvatarStore } from './avatar.js';
-import { i as SlotState, j as SlotStore } from './slots-BEi-ECHS.js';
+import { i as SlotState, j as SlotStore } from './slots-CrmBIIZI.js';
 import './core-BNb_OG-w.js';
-import './slack-8iIIb99E.js';
+import './slack-DsYQB40e.js';
 
 /**
  * `@open-athena/thrds/kv`: Cloudflare KV (or any get/put JSON store) for slot state and hosted avatars.

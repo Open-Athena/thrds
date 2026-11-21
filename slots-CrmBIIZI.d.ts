@@ -1,5 +1,5 @@
 import { d as MsgLike, M as Message, c as Msg } from './core-BNb_OG-w.js';
-import { s as SlackMessage, o as SlackClient, d as FileSpec, h as FilesSwap } from './slack-8iIIb99E.js';
+import { u as SlackMessage, q as SlackClient, o as SenderOverrides, e as FileSpec, i as FilesSwap } from './slack-DsYQB40e.js';
 
 /** Where a slot's message lives, and a hash of what was last sent there (`""`: unknown, so the next run edits once). */
 interface SlotRecord {
@@ -170,13 +170,15 @@ type UpsertResult = Awaited<ReturnType<typeof upsert>>;
  * are uploaded (waiting until Slack has processed them). Then `msg` is upserted with exactly those files, in order, and
  * the files it no longer has are deleted. The store's record keeps the attached ids and hashes; the hashes are also
  * stamped into the message's metadata (`FILE_HASHES`). Unchanged bytes and message: no uploads, and the upsert skips.
- * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens.
+ * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens. A sender
+ * override (`username`, `iconEmoji`, `iconUrl`, on `msg` or the client) throws `CustomSenderFilesError` before anything
+ * is uploaded or posted.
  */
-declare function upsertFiles(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">, store: SlotStore, key: string, msg: MsgLike, files: readonly FileSpec[], options?: UpsertOptions & {
+declare function upsertFiles(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile"> & SenderOverrides, store: SlotStore, key: string, msg: MsgLike, files: readonly FileSpec[], options?: UpsertOptions & {
     concurrency?: number;
 }): Promise<UpsertResult & FilesSwap>;
 /** `upsertFiles` with one file; `fileId` is null only when nothing was posted (`create: false`). */
-declare function upsertFile(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">, store: SlotStore, key: string, msg: MsgLike, file: FileSpec, options?: UpsertOptions): Promise<UpsertResult & FilesSwap & {
+declare function upsertFile(client: SlotClient & Pick<SlackClient, "upload" | "deleteFile"> & SenderOverrides, store: SlotStore, key: string, msg: MsgLike, file: FileSpec, options?: UpsertOptions): Promise<UpsertResult & FilesSwap & {
     fileId: string | null;
 }>;
 /** Seed a store with messages posted before thrds managed them (hash unknown: each is edited once on the next run). */
