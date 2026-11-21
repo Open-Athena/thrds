@@ -130,6 +130,17 @@ No orphaned files:
 
   Post and edit the message from a client without overrides (`slack.with({ username: undefined })`).
 
+  To keep a custom-named OP (a digest posted as "cw") and still attach downloadable images, put the files on a plain reply in its thread, posted and kept current by a client without overrides:
+
+  ```ts
+  const plain = slack.with({ username: undefined, iconEmoji: undefined, iconUrl: undefined });
+  const panels = (await plain.post({ text: "Panels" }, digestTs)).id; // once; keep the ts
+  // each run, with `previous` = the last run's fileIds and their content hashes (`hash53Bytes`):
+  const swap = await plain.replaceFiles(panels, files, { text: "Panels" }, { previous });
+  ```
+
+  The reply is an ordinary app message, so attaching by edit should work there, but that's not yet tested on a thread reply. Pass `previous` for now: `replaceFiles` reads a message back with `conversations.replies(ts, limit: 1)`, and it isn't verified that a reply's ts returns the reply rather than the thread's parent. If it returns the parent, the old files would never be deleted. Experiment `4 vii` checks both.
+
 The pieces:
 - **`upload(name, bytes | string | Blob, opts)`** returns a file id.
   - It's unshared unless `opts.channel` is given (with `initialComment` / `threadTs`); sharing posts a file message.

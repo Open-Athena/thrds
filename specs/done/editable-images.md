@@ -51,7 +51,7 @@ cw's digest OP was edited by `replace_files`, and Slack returned ok, but the mes
 | ii: no `username`, a thread reply | ok | the ts | the file |
 | iii: `username` and a reply | ok | the ts | none |
 | iv: `chat.postMessage` with `username` and `file_ids` | ok | none | none |
-| v: `username` post; the file shared into its thread (`completeUploadExternal` `thread_ts`) | ok | — | parent none; replies `[]` when read 3 s later (to be re-checked with polling) |
+| v: `username` post; the file shared into its thread (`completeUploadExternal` `thread_ts`) | ok | none | parent none; replies `[]` even after 30 s, and the same for vi, the plain-post control. Inconclusive: the script completed the upload a second time, which is a no-op (fixed; not rerun) |
 
 gcs's raw-API repro in #gcs-admin found that `icon_emoji` alone (no `username`) also makes a `bot_message`, and its files are dropped the same way. `chat.update`'s response already shows `message.files: []`.
 
@@ -61,6 +61,8 @@ So any sender override (`username`, `icon_emoji`, `icon_url`) plus files is unsu
   - `replaceFiles` on a message read back as `bot_message`;
   - `upsertFiles` with an override.
 - **After the write**, when only `chat.update`'s response reveals it: the echoed `message` is a `bot_message`, or its `files` lack the new ids. `definitelyNotAttached` counts this error as not attached, so the swap helpers delete this run's uploads.
+
+**Layout for a custom-named OP (disky):** keep the OP's override, and put the files on a plain reply in its thread. A client without overrides posts that reply once, then keeps it current with `replaceFiles`, passing `previous`. It's an ordinary app message, like the control and ii cases, but attaching to a thread reply is untested so far. Experiment `4 vii` covers it: a `username` OP, a plain reply, then `chat.update` `file_ids` on the reply. It also checks whether `conversations.replies(ts: reply, limit: 1)` returns the reply or the parent, which `replaceFiles`' read-back without `previous` relies on. Documented in the README.
 
 ## What landed (TS, `ts`)
 
