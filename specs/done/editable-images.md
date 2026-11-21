@@ -62,7 +62,12 @@ So any sender override (`username`, `icon_emoji`, `icon_url`) plus files is unsu
   - `upsertFiles` with an override.
 - **After the write**, when only `chat.update`'s response reveals it: the echoed `message` is a `bot_message`, or its `files` lack the new ids. `definitelyNotAttached` counts this error as not attached, so the swap helpers delete this run's uploads.
 
-**Layout for a custom-named OP (disky):** keep the OP's override, and put the files on a plain reply in its thread. A client without overrides posts that reply once, then keeps it current with `replaceFiles`, passing `previous`. It's an ordinary app message, like the control and ii cases, but attaching to a thread reply is untested so far. Experiment `4 vii` covers it: a `username` OP, a plain reply, then `chat.update` `file_ids` on the reply. It also checks whether `conversations.replies(ts: reply, limit: 1)` returns the reply or the parent, which `replaceFiles`' read-back without `previous` relies on. Documented in the README.
+**Layout for a custom-named OP (disky):** keep the OP's override, and put the files on a plain reply in its thread. A client without overrides posts that reply once, then keeps it current with `replaceFiles`. Experiment `4 vii` (disky, `tmp/slack-exp4-vii.txt`) confirmed it:
+- A `username` OP got a plain reply, then `chat.update` `file_ids` on the reply. The update was ok, and its echo, the thread's replies and `files.info` shares all show the file on the reply.
+- `conversations.replies` with the reply's ts returns the reply itself, both at `limit: 1` and bounded by `oldest` / `latest`. So `replaceFiles`' read-back (`message(ts)` / `attached_files`) works on a reply, and `previous` isn't needed.
+- disky's fleet card has done this live (4 files on a thread reply, swapped hourly) since 2026-11-20.
+
+Documented in the README.
 
 ## What landed (TS, `ts`)
 

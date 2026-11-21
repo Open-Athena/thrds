@@ -135,11 +135,10 @@ No orphaned files:
   ```ts
   const plain = slack.with({ username: undefined, iconEmoji: undefined, iconUrl: undefined });
   const panels = (await plain.post({ text: "Panels" }, digestTs)).id; // once; keep the ts
-  // each run, with `previous` = the last run's fileIds and their content hashes (`hash53Bytes`):
-  const swap = await plain.replaceFiles(panels, files, { text: "Panels" }, { previous });
+  const swap = await plain.replaceFiles(panels, files, { text: "Panels" }); // each run
   ```
 
-  The reply is an ordinary app message, so attaching by edit should work there, but that's not yet tested on a thread reply. Pass `previous` for now: `replaceFiles` reads a message back with `conversations.replies(ts, limit: 1)`, and it isn't verified that a reply's ts returns the reply rather than the thread's parent. If it returns the parent, the old files would never be deleted. Experiment `4 vii` checks both.
+  The reply is an ordinary app message, so attaching by edit works there (experiment `4 vii`). `replaceFiles` reads the reply's current files back by its ts: `conversations.replies` with a reply's ts returns that reply, not the thread's parent. disky's fleet card has swapped four files on a thread reply this way every hour since 2026-11-20.
 
 The pieces:
 - **`upload(name, bytes | string | Blob, opts)`** returns a file id.
