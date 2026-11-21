@@ -11,6 +11,7 @@ import pytest
 from urllib.error import HTTPError, URLError
 
 from thrds.slack import (
+    CustomSenderFilesError,
     FileNotProcessedError,
     FileSpec,
     FileSwapError,
@@ -36,8 +37,11 @@ class _Files(SlackClient):
         live_files: list[str] = [],
         live_hashes: list[str] | None = None,
         fail_upload: str | None = None,
+        live_extra: dict | None = None,
+        username: str | None = None,
     ):
-        super().__init__(token="xoxb-t", channel="C1")
+        super().__init__(token="xoxb-t", channel="C1", username=username)
+        self.live_extra = live_extra or {}
         self._bot_ids = ("U1", "B1")
         self.calls: list[tuple[str, dict | None, str]] = []
         self.unprocessed = unprocessed
@@ -68,10 +72,13 @@ class _Files(SlackClient):
         if endpoint == "chat.update" and self.update_error is not None:
             raise self.update_error
         if endpoint == "conversations.replies":
-            m: dict = {"ts": "1.0", "files": [{"id": f} for f in self.live_files]}
+            m: dict = {"ts": "1.0", "files": [{"id": f} for f in self.live_files], **self.live_extra}
             if self.live_hashes is not None:
                 m["metadata"] = {"event_type": "thrds", "event_payload": {"thrds_files": self.live_hashes}}
             return {"ok": True, "messages": [m]}
+        if endpoint == "chat.update" and self.live_extra.get("subtype") == "bot_message":
+            # Like Slack: ok, but the echoed bot_message shows no files.
+            return {"ok": True, "ts": data["ts"], "message": {"ts": data["ts"], **self.live_extra, "files": []}}
         if endpoint == "chat.postMessage":
             return {"ok": True, "ts": "5.0"}
         return {"ok": True, "ts": (data or {}).get("ts")}
@@ -335,3 +342,74 @@ def test_replace_file_reports_undeletable_previous_files(uploads):
     c = _Files(delete_error="cant_delete_file")
     swap = c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=[("F0", None)])
     assert (swap.file_ids, swap.deleted, [(i, e.code) for i, e in swap.undeleted]) == (["F1"], [], [("F0", "cant_delete_file")])
+
+
+_DIGEST = {"subtype": "bot_message", "username": "cw"}
+
+
+def _refusal(override: str, ts: str | None = None) -> str:
+    target = "a message" if ts is None else f"message {ts}"
+    return (
+        f"Slack won't attach files to {target} with a sender override ({override}): chat.update returns ok, "
+        "but the message shows no files. Post it without `username` / `icon_emoji` / `icon_url`"
+    )
+
+
+@pytest.mark.parametrize("client_kw, post_kw, override", [
+    ({}, {"username": "cw"}, 'username "cw"'),
+    ({"username": "cw"}, {}, 'username "cw"'),
+    ({}, {"icon_emoji": ":robot_face:"}, 'icon_emoji ":robot_face:"'),
+    ({"icon_url": "https://x.test/i.png"}, {}, "icon_url"),
+])
+def test_post_with_files_and_a_sender_override_raises_before_posting(client_kw, post_kw, override):
+    c = _Files()
+    for k, v in client_kw.items():
+        setattr(c, k, v)
+    with pytest.raises(CustomSenderFilesError) as e:
+        c.post("card", raw=True, files=["F1"], **post_kw)
+    assert (str(e.value), e.value.override, e.value.ts, c.calls) == (_refusal(override), override, None, [])
+
+
+def test_edit_with_files_from_an_overriding_client_raises_before_writing_detach_is_fine():
+    c = _Files(username="cw")
+    with pytest.raises(CustomSenderFilesError) as e:
+        c.edit("1.0", "card", raw=True, files=["F1"])
+    c.edit("1.0", "card", raw=True, files=[])
+    assert (str(e.value), [ep for ep, _, _ in c.calls]) == (_refusal('username "cw"'), ["chat.update"])
+
+
+def test_edit_on_a_bot_message_checks_the_update_response():
+    c = _Files(live_extra=_DIGEST)
+    with pytest.raises(CustomSenderFilesError) as e:
+        c.edit("1.0", "card", raw=True, files=["F1"])
+    assert (str(e.value), e.value.ts, [ep for ep, _, _ in c.calls]) == (
+        _refusal('username "cw"', "1.0"), "1.0", ["chat.update"],
+    )
+
+
+def test_replace_files_on_a_bot_message_raises_before_uploading(uploads):
+    c = _Files(live_extra=_DIGEST)
+    with pytest.raises(CustomSenderFilesError) as e:
+        c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True)
+    assert (str(e.value), [ep for ep, _, _ in c.calls], uploads) == (
+        _refusal('username "cw"', "1.0"), ["conversations.replies"], [],
+    )
+
+
+def test_replace_files_with_previous_learns_from_the_response_and_deletes_its_upload(uploads):
+    c = _Files(live_extra=_DIGEST)
+    with pytest.raises(FileSwapError) as e:
+        c.replace_file("1.0", "fleet.png", b"PNG", "card", raw=True, previous=[])
+    assert (str(e.value), str(e.value.__cause__), c.calls[-1][:2]) == (
+        "attaching file F1 failed (deleted the upload)",
+        _refusal('username "cw"', "1.0"),
+        ("files.delete", {"file": "F1"}),
+    )
+
+
+def test_replace_files_from_an_overriding_client_raises_before_reading_or_uploading(uploads):
+    c = _Files(live_files=["F0"])
+    c.icon_emoji = ":robot_face:"
+    with pytest.raises(CustomSenderFilesError) as e:
+        c.replace_files("1.0", [("a.png", b"a")], "card", raw=True, previous=[("F0", None)])
+    assert (str(e.value), c.calls) == (_refusal('icon_emoji ":robot_face:"'), [])

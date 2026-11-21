@@ -231,11 +231,13 @@ def is_processed(file: dict) -> bool:
     return not mimetype.startswith("image/") or any(_THUMB.match(k) for k in file)
 
 
-def _definitely_not_attached(e: BaseException) -> bool:
+def _definitely_not_attached(e: BaseException | None) -> bool:
     if isinstance(e, SlackApiError):
         return e.definite
+    if isinstance(e, CustomSenderFilesError):
+        return True
     if isinstance(e, FilesNotAttachedError):
-        return isinstance(e.__cause__, SlackApiError) and e.__cause__.definite
+        return _definitely_not_attached(e.__cause__)
     return False
 
 
@@ -244,6 +246,51 @@ class FilesNotAttachedError(RuntimeError):
     def __init__(self, ts: str):
         super().__init__(f"posted {ts}, but attaching its files failed")
         self.ts = ts
+
+
+class CustomSenderFilesError(ValueError):
+    """Slack doesn't attach files to a message with a sender override
+    (``username``, ``icon_emoji`` or ``icon_url``, which make its subtype
+    ``bot_message``). ``chat.update`` with ``file_ids`` returns ok, and
+    ``files.info`` records a share at the message's ts, but the update's own
+    ``message.files`` is ``[]``, and history and clients show no files.
+    ``chat.postMessage`` with ``file_ids`` is just as silent, and thread
+    replies make no difference (disky and gcs, 2026-11-20). So thrds raises
+    before writing or uploading when it knows of an override, and checks the
+    update's response otherwise: post and edit the message from a client
+    without sender overrides."""
+    def __init__(self, override: str | None, ts: str | None = None):
+        target = "a message" if ts is None else f"message {ts}"
+        which = "" if override is None else f" ({override})"
+        super().__init__(
+            f"Slack won't attach files to {target} with a sender override{which}: "
+            "chat.update returns ok, but the message shows no files. Post it "
+            "without `username` / `icon_emoji` / `icon_url`"
+        )
+        self.override = override
+        self.ts = ts
+
+
+def assert_files_attachable(
+    username: str | None = None,
+    icon_emoji: str | None = None,
+    icon_url: str | None = None,
+    target: dict | None = None,
+) -> None:
+    """Raise `CustomSenderFilesError` when files can't be attached: the
+    message would be sent with a sender override, or ``target`` (a raw message
+    as read back, or as ``chat.update`` echoes it) is a ``bot_message``."""
+    override = (
+        f'username "{username}"' if username is not None
+        else f'icon_emoji "{icon_emoji}"' if icon_emoji is not None
+        else "icon_url" if icon_url is not None
+        else None
+    )
+    if override is not None:
+        raise CustomSenderFilesError(override)
+    if target is not None and target.get("subtype") == "bot_message":
+        name = target.get("username")
+        raise CustomSenderFilesError(None if name is None else f'username "{name}"', target.get("ts"))
 
 
 class ScanCapReached(RuntimeError):
@@ -689,8 +736,18 @@ class SlackClient:
         ``files`` are uploaded file ids (`upload`) to attach below the message.
         ``chat.postMessage`` takes no ``file_ids``, so they're attached by an
         `edit` right after the post; if that fails, `FilesNotAttachedError`
-        (with the posted ``ts``) is raised.
+        (with the posted ``ts``) is raised. Files with a sender override
+        (``username``, ``icon_emoji``, ``icon_url``, on the call or the client)
+        raise `CustomSenderFilesError` before posting (Slack wouldn't show
+        them).
         """
+        if files:
+            msg_icon = icon_url is not None or icon_emoji is not None
+            assert_files_attachable(
+                username if username is not None else self.username,
+                icon_emoji if msg_icon else self.icon_emoji,
+                icon_url if msg_icon else self.icon_url,
+            )
         if broadcast and thread_id is None:
             raise ValueError(
                 "broadcast=True requires a thread_id: Slack's reply_broadcast "
@@ -791,7 +848,16 @@ class SlackClient:
         exists until `delete_file`. Only an attached file offers Download /
         Save on Slack's phone apps (an image block doesn't). See the TS
         branch's `specs/done/slack-file-replace.md`.
+
+        Attaching files from a client with a sender override raises
+        `CustomSenderFilesError` before writing: its posts carry the override,
+        and Slack shows no files on those. Otherwise the update's response is
+        checked: if its ``message`` is a ``bot_message``, or lists files
+        without all of the new ones, the edit landed but the files didn't, and
+        it raises `CustomSenderFilesError` (with ``ts``).
         """
+        if files:
+            assert_files_attachable(self.username, self.icon_emoji, self.icon_url)
         content = self._fold_images_into_content(content, images)
         if len(content) > SLACK_MESSAGE_LIMIT:
             raise ValueError(
@@ -820,7 +886,15 @@ class SlackClient:
             data["metadata"] = md
         if files is not None:
             data["file_ids"] = list(files)
-        self._request("chat.update", data)
+        result = self._request("chat.update", data)
+        if files:
+            echoed = (result or {}).get("message")
+            if isinstance(echoed, dict):
+                shown = echoed.get("files")
+                shown_ids = None if shown is None else {f.get("id") for f in shown}
+                if echoed.get("subtype") == "bot_message" or (shown_ids is not None and not set(files) <= shown_ids):
+                    name = echoed.get("username")
+                    raise CustomSenderFilesError(None if name is None else f'username "{name}"', message_id)
         return Message(id=message_id, content=content)
 
     def _attach_chrome(self, data: dict, content: str, wire: str) -> None:
@@ -998,11 +1072,18 @@ class SlackClient:
         """Message ``ts``'s attached files as ``(id, content hash)`` pairs,
         the hash from its ``thrds_files`` metadata when that lines up (else
         ``None``). Needs a history scope."""
+        return self._attached(self._raw_message(ts))
+
+    def _raw_message(self, ts: str) -> dict:
+        """Message ``ts`` as Slack returns it (``{}`` if it isn't there)."""
         result = self._request("conversations.replies", {
             "channel": self.channel, "ts": ts, "limit": 1, "include_all_metadata": True,
         }, method="GET")
         msgs = result.get("messages") or []
-        m = msgs[0] if msgs and msgs[0].get("ts") == ts else {}
+        return msgs[0] if msgs and msgs[0].get("ts") == ts else {}
+
+    @staticmethod
+    def _attached(m: dict) -> list[tuple[str, str | None]]:
         ids = [f["id"] for f in m.get("files", []) if isinstance(f.get("id"), str)]
         hashes = ((m.get("metadata") or {}).get("event_payload") or {}).get(FILE_HASHES)
         aligned = isinstance(hashes, list) and len(hashes) == len(ids) and all(isinstance(h, str) for h in hashes)
@@ -1037,11 +1118,19 @@ class SlackClient:
         landed (timeout, 5xx) keeps them. Either way it raises
         `FileSwapError` with their ids, or re-raises as-is if nothing was
         uploaded.
+
+        A client with a sender override, or a message read back as
+        ``bot_message``, raises `CustomSenderFilesError` before uploading. One
+        only the update's response reveals raises it after, as `FileSwapError`'s
+        cause, with this run's uploads deleted.
         """
         specs = [f if isinstance(f, FileSpec) else FileSpec(*f) for f in files]
+        target = self._raw_message(ts) if previous is None else None
+        if specs:
+            assert_files_attachable(self.username, self.icon_emoji, self.icon_url, target)
         bodies = [s.data.encode() if isinstance(s.data, str) else s.data for s in specs]
         hashes = [hash53_bytes(b) for b in bodies]
-        unused = list(self.attached_files(ts) if previous is None else previous)
+        unused = list(self._attached(target) if target is not None else previous)
         ids: list[str | None] = []
         for h in hashes:
             hit = next((n for n, (_, ph) in enumerate(unused) if ph is not None and ph == h), None)

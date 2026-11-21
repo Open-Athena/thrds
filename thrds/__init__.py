@@ -6,6 +6,7 @@ from .lint import BskyLinter, DiscordLinter, LintIssue, LintReport, MastodonLint
 from .mastodon import MastodonClient
 from .protocol import ThreadClient
 from .slack import (
+    CustomSenderFilesError,
     FileNotProcessedError,
     FILE_HASHES,
     FileSpec,
@@ -16,6 +17,7 @@ from .slack import (
     ScanCapReached,
     SlackApiError,
     SlackClient,
+    assert_files_attachable,
     hash53_bytes,
     is_processed,
 )
@@ -53,6 +55,8 @@ __all__ = [
     "SenderChangeForbidden",
     "SenderChangePolicy",
     "SessionState",
+    "CustomSenderFilesError",
+    "assert_files_attachable",
     "FileNotProcessedError",
     "FILE_HASHES",
     "FileSpec",

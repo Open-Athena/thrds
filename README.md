@@ -110,6 +110,12 @@ thrds slack permalink #foo 1783.1        # get workspace permalink URL
 
 If an upload fails partway, this run's uploads are deleted. A failed edit deletes them when Slack definitely refused it, or keeps them when the write may have landed (`FileSwapError` carries their ids). On the phone, several attachments show as one horizontal row you swipe through, in list order, not a grid.
 
+Slack never shows files on a message with a sender override (`username`, `icon_emoji` or `icon_url`, which make it a `bot_message`). `chat.update` with `file_ids` returns ok, but the message shows nothing. So `post(files=…)`, `edit(files=…)` and `replace_files` raise `CustomSenderFilesError`:
+- before uploading or writing, when the call or client has an override, or the message reads back as `bot_message`;
+- after the edit, when `chat.update`'s response reveals it: a `bot_message`, or `files` without the new ids. `replace_files` then deletes its uploads.
+
+Attach files from a client without sender overrides.
+
 The pieces:
 - `upload(name, data, processed=True)`: polls `files.info` every 0.5 s for up to 30 s until there's a `mimetype` and, for an image, thumbnails. The bytes POST retries a 5xx, a 429 or a timeout.
 - `edit(..., files=)`: omitting it keeps the attached files, and `[]` detaches them.
