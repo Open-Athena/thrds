@@ -114,7 +114,7 @@ Slack never shows files on a message with a sender override (`username`, `icon_e
 - before uploading or writing, when the call or client has an override, or the message reads back as `bot_message`;
 - after the edit, when `chat.update`'s response reveals it: a `bot_message`, or `files` without the new ids. `replace_files` then deletes its uploads.
 
-Attach files from a client without sender overrides. To keep a custom-named OP (a digest posted as "cw"), put the files on a plain reply in its thread: post it once from a client without overrides, then `replace_files(reply_ts, …, previous=…)` each run. Pass `previous` until it's verified that reading a reply back by its ts returns the reply rather than the thread's parent (TS `specs/done/editable-images.md`, experiment 4 vii).
+Attach files from a client without sender overrides. To keep a custom-named OP (a digest posted as "cw"), put the files on a plain reply in its thread: post it once from a client without overrides, then `replace_files(reply_ts, …)` each run. Reading a reply back by its ts returns the reply itself, so `previous` isn't needed (TS `specs/done/editable-images.md`, experiment 4 vii).
 
 The pieces:
 - `upload(name, data, processed=True)`: polls `files.info` every 0.5 s for up to 30 s until there's a `mimetype` and, for an image, thumbnails. The bytes POST retries a 5xx, a 429 or a timeout.
