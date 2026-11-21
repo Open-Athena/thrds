@@ -39,12 +39,16 @@ export type {
   FileSpec,
   FileSwap,
   FilesSwap,
+  SenderOverrides,
   SlackUser,
   UploadData,
   UploadOptions,
 } from "./slack";
 export {
   CHANNEL_TTL_MS,
+  CustomSenderFilesError,
+  assertFilesAttachable,
+  senderOverrides,
   FileNotProcessedError,
   FileSwapError,
   FilesNotAttachedError,

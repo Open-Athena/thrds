@@ -88,6 +88,8 @@ export interface FakeMessage {
   bot_id?: string;
   user?: string;
   username?: string;
+  /** `bot_message` for a post with a `username` override. */
+  subtype?: string;
   blocks?: unknown[];
   metadata?: { event_type: string; event_payload: Record<string, unknown> };
   /** Attached files, as Slack lists them on a message (here just `id` and `name`). */
@@ -137,6 +139,7 @@ export function fakeChannel(
       const m: FakeMessage = { ts, text: body["text"] as string, bot_id: "B_BOT" };
       if (body["thread_ts"]) m.thread_ts = body["thread_ts"] as string;
       if (body["username"]) m.username = body["username"] as string;
+      if (body["username"] || body["icon_url"] || body["icon_emoji"]) m.subtype = "bot_message";
       if (body["blocks"]) m.blocks = body["blocks"] as unknown[];
       if (body["metadata"]) m.metadata = body["metadata"] as FakeMessage["metadata"];
       messages.push(m);
@@ -153,11 +156,18 @@ export function fakeChannel(
         const ids = body["file_ids"] as string[];
         const missing = ids.find((id) => !files.has(id));
         if (missing !== undefined) return err("file_not_found");
-        if (ids.length > 0) m.files = ids.map((id) => ({ id, name: files.get(id)!.name }));
+        // Like Slack: ok, but a `bot_message` (sender override) never shows attached files.
+        if (m.subtype === "bot_message") delete m.files;
+        else if (ids.length > 0) m.files = ids.map((id) => ({ id, name: files.get(id)!.name }));
         else delete m.files;
       }
       writes.push(["edit", m.text]);
-      return { body: { ok: true, ts: m.ts } };
+      // The response echoes the message; with `file_ids`, its `files` (`[]` when none show).
+      const echoed: Record<string, unknown> = { ts: m.ts, text: m.text };
+      if (m.subtype) echoed["subtype"] = m.subtype;
+      if (m.username) echoed["username"] = m.username;
+      if (body["file_ids"] !== undefined) echoed["files"] = m.files ?? [];
+      return { body: { ok: true, ts: m.ts, message: echoed } };
     },
     "chat.delete": ({ body }) => {
       const i = messages.findIndex((x) => x.ts === body["ts"]);

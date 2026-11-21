@@ -15,12 +15,15 @@ import { THRDS_HASH, msgHash, toMsg, type Message, type Msg, type MsgLike } from
 import { hash53Bytes } from "./hash";
 import {
   FILE_HASHES,
+  assertFilesAttachable,
+  senderOverrides,
   swapFiles,
   toBytes,
   withFiles,
   type AttachedFile,
   type FileSpec,
   type FilesSwap,
+  type SenderOverrides,
   type SlackClient,
   type SlackMessage,
 } from "./slack";
@@ -592,16 +595,19 @@ export type UpsertResult = Awaited<ReturnType<typeof upsert>>;
  * are uploaded (waiting until Slack has processed them). Then `msg` is upserted with exactly those files, in order, and
  * the files it no longer has are deleted. The store's record keeps the attached ids and hashes; the hashes are also
  * stamped into the message's metadata (`FILE_HASHES`). Unchanged bytes and message: no uploads, and the upsert skips.
- * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens.
+ * Failures follow `swapFiles` (no orphaned uploads). With `create: false` and no record, nothing happens. A sender
+ * override (`username`, `iconEmoji`, `iconUrl`, on `msg` or the client) throws `CustomSenderFilesError` before anything
+ * is uploaded or posted.
  */
 export async function upsertFiles(
-  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">,
+  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile"> & SenderOverrides,
   store: SlotStore,
   key: string,
   msg: MsgLike,
   files: readonly FileSpec[],
   options: UpsertOptions & { concurrency?: number } = {},
 ): Promise<UpsertResult & FilesSwap> {
+  if (files.length > 0) assertFilesAttachable(senderOverrides(toMsg(msg), client));
   const { concurrency, ...upsertOptions } = options;
   const record = (await store.get(key))?.parent;
   if (record === undefined && options.create === false && options.ts === undefined) {
@@ -630,7 +636,7 @@ export async function upsertFiles(
 
 /** `upsertFiles` with one file; `fileId` is null only when nothing was posted (`create: false`). */
 export async function upsertFile(
-  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile">,
+  client: SlotClient & Pick<SlackClient, "upload" | "deleteFile"> & SenderOverrides,
   store: SlotStore,
   key: string,
   msg: MsgLike,

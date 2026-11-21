@@ -1,7 +1,16 @@
 import { describe, expect, it } from "vitest";
 import { THRDS_HASH, contentKey, msgHash } from "../src/core";
 import { hash53Bytes } from "../src/hash";
-import { FILE_HASHES, FileNotProcessedError, FileSwapError, FilesNotAttachedError, isProcessed, withFiles } from "../src/slack";
+import {
+  CustomSenderFilesError,
+  FILE_HASHES,
+  FileNotProcessedError,
+  FileSwapError,
+  FilesNotAttachedError,
+  assertFilesAttachable,
+  isProcessed,
+  withFiles,
+} from "../src/slack";
 import { memoryStore, tagSlot, upsert, upsertFile, upsertFiles } from "../src/slots";
 import { image, section, versionedUrl } from "../src/mrkdwn";
 import { fakeChannel, timeoutError } from "./helpers";
@@ -450,6 +459,99 @@ describe("upsertFile(s)", () => {
       { status: "missing", ts: "", action: null, fileIds: [], uploaded: [], deleted: [], undeleted: [], fileId: null },
       [],
     ]);
+  });
+});
+
+describe("sender overrides (bot_message): Slack shows no files, so thrds refuses", () => {
+  const digest = { ts: "1.000000", text: "digest", bot_id: "B_BOT", username: "cw", subtype: "bot_message" };
+  const refusal = (override: string, ts?: string) =>
+    `Slack won't attach files to ${ts === undefined ? "a message" : `message ${ts}`} with a sender override (${override}): ` +
+    "chat.update returns ok, but the message shows no files. Post it without `username` / `iconEmoji` / `iconUrl`";
+
+  it("the fake behaves like Slack: chat.update file_ids is ok, echoes files: [], and the bot_message shows none", async () => {
+    const { client, messages } = fakeChannel({ messages: [{ ...digest }] });
+    const id = await client.upload("a.png", bytes("A"));
+    const r = await client.api("chat.update", { channel: "C1", ts: "1.000000", text: "digest", file_ids: [id] });
+    expect([r["message"], messages]).toEqual([
+      { ts: "1.000000", text: "digest", subtype: "bot_message", username: "cw", files: [] },
+      [{ ...digest }],
+    ]);
+  });
+
+  it("post with files and any sender override (msg or client: username, iconEmoji, iconUrl) throws before posting", async () => {
+    const { client, calls } = fakeChannel();
+    const tries = [
+      client.post({ text: "d", username: "cw", files: ["F1"] }),
+      client.with({ username: "cw" }).post({ text: "d", files: ["F1"] }),
+      client.post({ text: "d", iconEmoji: ":robot_face:", files: ["F1"] }),
+      client.with({ iconUrl: "https://x.test/i.png" }).post({ text: "d", files: ["F1"] }),
+    ];
+    const errors = await Promise.all(tries.map((p) => p.catch((x) => x)));
+    const plain = await client.with({ username: "cw" }).post({ text: "d", files: [] });
+    expect([
+      errors.map((e) => [e instanceof CustomSenderFilesError, e.message, e.override, e.ts]),
+      plain.id,
+      calls.map((c) => c.method),
+    ]).toEqual([
+      [
+        [true, refusal('username "cw"'), 'username "cw"', undefined],
+        [true, refusal('username "cw"'), 'username "cw"', undefined],
+        [true, refusal('icon_emoji ":robot_face:"'), 'icon_emoji ":robot_face:"', undefined],
+        [true, refusal("icon_url"), "icon_url", undefined],
+      ],
+      "101.000000",
+      ["chat.postMessage"],
+    ]);
+  });
+
+  it("edit with files from a client with an override throws before writing; detaching ([]) is allowed", async () => {
+    const { client, calls } = fakeChannel({ messages: [{ ...digest }] });
+    const cw = client.with({ username: "cw" });
+    const e = await cw.edit("1.000000", { text: "digest", files: ["F1"] }).catch((x) => x);
+    await cw.edit("1.000000", { text: "digest", files: [] });
+    expect([e.message, calls.map((c) => c.method)]).toEqual([refusal('username "cw"'), ["chat.update"]]);
+  });
+
+  it("edit from a plain client on a bot_message: the update lands, its response shows no files, so it throws", async () => {
+    const { client, calls } = fakeChannel({ messages: [{ ...digest }] });
+    const id = await client.upload("a.png", bytes("A"));
+    const e = await client.edit("1.000000", { text: "digest", files: [id] }).catch((x) => x);
+    expect([e.message, e.ts, calls.at(-1)!.method]).toEqual([refusal('username "cw"', "1.000000"), "1.000000", "chat.update"]);
+  });
+
+  it("replaceFiles on a bot_message (as read back) throws before uploading", async () => {
+    const { client, calls, files } = fakeChannel({ messages: [{ ...digest }] });
+    const e = await client.replaceFiles("1.000000", [{ name: "a.png", data: bytes("A") }], "digest").catch((x) => x);
+    expect([e.message, calls.map((c) => c.method), files.size]).toEqual([
+      refusal('username "cw"', "1.000000"),
+      ["conversations.replies", "auth.test"],
+      0,
+    ]);
+  });
+
+  it("replaceFiles with `previous` (no read) learns from the update's response, and deletes its upload", async () => {
+    const { client, files } = fakeChannel({ messages: [{ ...digest }] });
+    const e = await client.replaceFiles("1.000000", [{ name: "a.png", data: bytes("A") }], "digest", { previous: [] }).catch((x) => x);
+    expect([e instanceof FileSwapError, e.message, e.cause?.message, files.size]).toEqual([
+      true,
+      "attaching file F101 failed (deleted the upload)",
+      refusal('username "cw"', "1.000000"),
+      0,
+    ]);
+  });
+
+  it("upsertFiles with a client override throws before uploading or posting", async () => {
+    const { client, calls } = fakeChannel();
+    const e = await upsertFiles(client.with({ iconEmoji: ":robot_face:" }), memoryStore(), "digest", "digest", [{ name: "a.png", data: bytes("A") }]).catch((x) => x);
+    expect([e.message, calls]).toEqual([refusal('icon_emoji ":robot_face:"'), []]);
+  });
+
+  it("assertFilesAttachable: no override and a plain message pass", () => {
+    expect([
+      assertFilesAttachable({}),
+      assertFilesAttachable({ username: undefined }, { id: "1.0", subtype: "thread_broadcast" }),
+      assertFilesAttachable({}, null),
+    ]).toEqual([undefined, undefined, undefined]);
   });
 });
 

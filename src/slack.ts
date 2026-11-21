@@ -132,6 +132,68 @@ export class FilesNotAttachedError extends Error {
   }
 }
 
+/**
+ * Slack doesn't attach files to a message with a sender override (`username`, `icon_emoji` or `icon_url`, which make
+ * its subtype `bot_message`). `chat.update` with `file_ids` returns ok, and `files.info` records a share at the
+ * message's ts, but the update's own `message.files` is `[]`, and history and clients show no files.
+ * `chat.postMessage` with `file_ids` is just as silent, and thread replies make no difference (disky and gcs,
+ * 2026-11-20). So thrds refuses before writing (or uploading) when it knows of an override, and checks the update's
+ * response otherwise: post and edit the message from a client without sender overrides.
+ */
+export class CustomSenderFilesError extends Error {
+  constructor(
+    /** The override, e.g. `username "cw"` (when known). */
+    public readonly override: string | undefined,
+    /** The message, when it already exists. */
+    public readonly ts?: string,
+  ) {
+    super(
+      `Slack won't attach files to ${ts === undefined ? "a message" : `message ${ts}`} with a sender override` +
+        `${override === undefined ? "" : ` (${override})`}: chat.update returns ok, but the message shows no files. ` +
+        "Post it without `username` / `iconEmoji` / `iconUrl`",
+    );
+    this.name = "CustomSenderFilesError";
+  }
+}
+
+/** A message's sender overrides, as `chat.postMessage` would send them. */
+export interface SenderOverrides {
+  username?: string | undefined;
+  iconUrl?: string | undefined;
+  iconEmoji?: string | undefined;
+}
+
+/**
+ * Throws `CustomSenderFilesError` when files can't be attached: the message would be sent with a sender override, or
+ * (`target`, as read back) is a `bot_message`.
+ */
+export function assertFilesAttachable(
+  sender: SenderOverrides,
+  target?: Pick<SlackMessage, "id" | "subtype" | "username"> | null,
+): void {
+  const override =
+    sender.username !== undefined
+      ? `username "${sender.username}"`
+      : sender.iconEmoji !== undefined
+        ? `icon_emoji "${sender.iconEmoji}"`
+        : sender.iconUrl !== undefined
+          ? "icon_url"
+          : undefined;
+  if (override !== undefined) throw new CustomSenderFilesError(override);
+  if (target?.subtype === "bot_message") {
+    throw new CustomSenderFilesError(target.username === undefined ? undefined : `username "${target.username}"`, target.id);
+  }
+}
+
+/** `msg`'s sender overrides, falling back to `client`'s. */
+export function senderOverrides(msg: Msg, client: SenderOverrides): SenderOverrides {
+  return {
+    username: msg.username ?? client.username,
+    iconUrl: msg.iconUrl ?? client.iconUrl,
+    iconEmoji: msg.iconEmoji ?? client.iconEmoji,
+  };
+}
+
 /** Slack hadn't processed an upload in time. An unshared one is deleted (`deleted`), since nothing can use it. */
 export class FileNotProcessedError extends Error {
   constructor(
@@ -217,10 +279,14 @@ export async function toBytes(data: UploadData): Promise<Uint8Array> {
   return data;
 }
 
-/** Whether a failed write certainly didn't attach anything: Slack refused it, or refused the edit after a post. */
+/**
+ * Whether a failed write certainly didn't attach anything: Slack refused it (or refused the edit after a post), or it
+ * landed on a message that shows no files (`CustomSenderFilesError`).
+ */
 export function definitelyNotAttached(e: unknown): boolean {
   if (e instanceof SlackApiError) return e.definite;
-  if (e instanceof FilesNotAttachedError) return e.cause instanceof SlackApiError && e.cause.definite;
+  if (e instanceof CustomSenderFilesError) return true;
+  if (e instanceof FilesNotAttachedError) return definitelyNotAttached(e.cause);
   return false;
 }
 
@@ -734,12 +800,15 @@ export class SlackClient implements ThreadClient {
 
   /**
    * Post a message (a thread reply with `threadId`). Its sender overrides the client's default sender. `files` are
-   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`.
+   * attached by an edit right after the post; if that edit fails, this throws `FilesNotAttachedError`. Files with a
+   * sender override (`username`, `iconEmoji`, `iconUrl`) throw `CustomSenderFilesError` before posting (Slack
+   * wouldn't show them).
    */
   async post(m: MsgLike, threadId?: string): Promise<Message> {
     const msg = toMsg(m);
     const { files, ...bare } = msg;
     const attach = files !== undefined && files.length > 0;
+    if (attach) assertFilesAttachable(senderOverrides(msg, this));
     const data = this.body(attach ? bare : msg);
     const username = msg.username ?? this.username;
     const iconUrl = msg.iconUrl ?? this.iconUrl;
@@ -769,12 +838,26 @@ export class SlackClient implements ThreadClient {
    * Edit a message's text, blocks, attachments, attached files and metadata. Slack ignores sender fields on an edit.
    * To clear blocks, attachments or files, pass `[]`; omitting them leaves them as they were. Detaching a file doesn't
    * delete it (`deleteFile`). For Slack's raw reply (`message`), call `api("chat.update", …)` directly.
+   *
+   * Attaching files from a client (or `msg`) with a sender override throws `CustomSenderFilesError` before writing:
+   * that client's posts carry the override, and Slack shows no files on those. Edit with a client without one
+   * (`with`). Otherwise the update's response is checked: if its `message` is a `bot_message`, or lists files without
+   * all of the new ones, the edit landed but the files didn't, and this throws `CustomSenderFilesError` (with `ts`).
    */
   async edit(messageId: string, m: MsgLike): Promise<Message> {
     const msg = toMsg(m);
+    const attach = msg.files !== undefined && msg.files.length > 0;
+    if (attach) assertFilesAttachable(senderOverrides(msg, this));
     const data: Record<string, unknown> = { ...this.body(msg), ts: messageId };
     if (msg.files !== undefined) data["file_ids"] = msg.files;
-    await this.api("chat.update", data);
+    const result = await this.api("chat.update", data);
+    if (attach) {
+      const echoed = result["message"] as { subtype?: string; username?: string; files?: Array<{ id?: unknown }> } | undefined;
+      const shown = echoed?.files === undefined ? undefined : new Set(echoed.files.map((f) => f.id));
+      if (echoed?.subtype === "bot_message" || (shown !== undefined && !msg.files!.every((id) => shown.has(id)))) {
+        throw new CustomSenderFilesError(echoed?.username === undefined ? undefined : `username "${echoed.username}"`, messageId);
+      }
+    }
     return this.sent(messageId, msg);
   }
 
@@ -869,6 +952,10 @@ export class SlackClient implements ThreadClient {
    * longer has are deleted. The previous files (and their content hashes, from the message's metadata) are read from
    * the message (a history scope), unless `previous` is given. See `swapFiles` for failures; `upsertFiles` is the
    * stored-state version.
+   *
+   * A message with a sender override (`bot_message`, when it was read) or a client with one throws
+   * `CustomSenderFilesError` before uploading anything. One only the update's response reveals throws it after,
+   * having deleted this run's uploads.
    */
   async replaceFiles(
     ts: string,
@@ -876,7 +963,9 @@ export class SlackClient implements ThreadClient {
     m: MsgLike,
     options: { previous?: AttachedFile[]; concurrency?: number } = {},
   ): Promise<FilesSwap> {
-    const previous = options.previous ?? attachedFiles(await this.message(ts));
+    const target = options.previous === undefined ? await this.message(ts) : undefined;
+    if (files.length > 0) assertFilesAttachable(senderOverrides(toMsg(m), this), target);
+    const previous = options.previous ?? attachedFiles(target ?? null);
     const desired = await Promise.all(
       files.map(async ({ name, data, ...uploadOptions }) => {
         const bytes = await toBytes(data);

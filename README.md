@@ -124,6 +124,11 @@ No orphaned files:
 - **A write Slack definitely refused** deletes this run's uploads, then throws `FileSwapError` (`fileIds`, `deleted: true`). Reused files are never deleted.
 - **A write that may have landed** (a timeout or 5xx) keeps the uploads and throws `FileSwapError` with `deleted: false` and their ids. A write that fails with nothing newly uploaded rethrows as-is.
 - **An unshared upload that never finishes processing** is deleted, and `upload` throws `FileNotProcessedError` (`fileId`, `waitedMs`, `deleted`).
+- **A sender override** (`username`, `iconEmoji` or `iconUrl`) means Slack won't show the files (below), so thrds throws `CustomSenderFilesError`:
+  - before anything is uploaded or written, for an override on the msg or the client, or a message read back as `bot_message`;
+  - after the write, when only `chat.update`'s response shows it: its `message` is a `bot_message`, or its `files` lack the new ids. The no-orphan rules above delete the uploads.
+
+  Post and edit the message from a client without overrides (`slack.with({ username: undefined })`).
 
 The pieces:
 - **`upload(name, bytes | string | Blob, opts)`** returns a file id.
@@ -149,6 +154,10 @@ What Slack does (tested by disky in a DM, 2026-11; [spec][file-replace]):
   - Every `chat.update` sets a new `edited.ts`, even one that only changes files. The `(edited)` badge is a client rendering detail: it shows after a plain-text / `rich_text` body, but not under section blocks.
   - Image blocks offer no Download on Android, whether they point at a URL or at a Slack file (`slack_file: {id}` or `{url}`).
   - Several attached files show on the phone under an "N attachments" line as one horizontal row you swipe through, in list order. Wide images are about 60% of the screen wide, so one plus the edge of the next is visible; 11 square tiles show about 2.5 at a time. It's not a grid, and there's no "show more" (Ryan's iPhone screenshots, experiments 6–7).
+- **No files on a sender override:** a message posted with `username`, or with only `icon_emoji` / `icon_url`, has subtype `bot_message` (via `chat:write.customize`), and never shows attached files.
+  - `chat.update` with `file_ids` returns ok, and `files.info` even lists a share at the message's ts. But the update's own `message.files` is `[]`, and history, replies and clients show no files.
+  - `chat.postMessage` with `username` and `file_ids` is ok too, and shares nothing.
+  - Thread replies make no difference: a plain message with replies takes files fine (experiment 4 and gcs's repro, 2026-11-20). The earlier experiments passed only because they started from plain app messages.
 - **Events:** polling `files.info` is the supported way to wait. Slack's `file_change` event ("any property of a file is changed", `files:read`) might announce processing, but that's untested: the test app has no Events API subscription.
 - **Not tested:** what a message shows when a file that's still attached gets deleted.
 

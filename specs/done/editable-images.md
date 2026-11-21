@@ -40,6 +40,28 @@ Other findings from those runs:
 
 Starting from a text-only message, three `chat.update`s with the same text: `file_ids` `[P]` → `[P, Q]` → `[Q]`. Each was ok and read back exactly that list, in that order. So `Msg.files` is a full replacement list. Every update set a new `edited.ts`, even when only the files changed. The `(edited)` badge shows after a plain-text / `rich_text` body, not under section blocks. Untested: the maximum files per message (Slack's UI allows 10).
 
+## Experiment 4: sender overrides (disky, gcs; 2026-11-20)
+
+cw's digest OP was edited by `replace_files`, and Slack returned ok, but the message showed no files. That OP was posted with `username=` (subtype `bot_message`) and had 21 thread replies. Experiment 5 had passed only because it started from a plain app message. disky ran `tmp/slack_file_experiment.py <dm> 4` (log: disky `tmp/slack-exp4.txt`):
+
+| Case | `chat.update` | `files.info` shares | history / replies `files` |
+|---|---|---|---|
+| control (plain post) | ok | the ts | the file |
+| i: `username` | ok | the ts | none |
+| ii: no `username`, a thread reply | ok | the ts | the file |
+| iii: `username` and a reply | ok | the ts | none |
+| iv: `chat.postMessage` with `username` and `file_ids` | ok | none | none |
+| v: `username` post; the file shared into its thread (`completeUploadExternal` `thread_ts`) | ok | — | parent none; replies `[]` when read 3 s later (to be re-checked with polling) |
+
+gcs's raw-API repro in #gcs-admin found that `icon_emoji` alone (no `username`) also makes a `bot_message`, and its files are dropped the same way. `chat.update`'s response already shows `message.files: []`.
+
+So any sender override (`username`, `icon_emoji`, `icon_url`) plus files is unsupported, and thread replies don't matter. thrds now raises `CustomSenderFilesError`:
+- **Up front, before uploading or writing**, when it knows of an override:
+  - `post` / `edit` with files and an override on the msg or the client;
+  - `replaceFiles` on a message read back as `bot_message`;
+  - `upsertFiles` with an override.
+- **After the write**, when only `chat.update`'s response reveals it: the echoed `message` is a `bot_message`, or its `files` lack the new ids. `definitelyNotAttached` counts this error as not attached, so the swap helpers delete this run's uploads.
+
 ## What landed (TS, `ts`)
 
 - **Processing wait** (`upload`, on by default):
