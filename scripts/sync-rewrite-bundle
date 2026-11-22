@@ -1,0 +1,40 @@
+#!/usr/bin/env bash
+# Vendor the bulk-rewrite review page (`PlanView`, built from the `ts` branch)
+# into `thrds/rewrite_review/dist/`, and write the TS parity fixtures into that
+# checkout, so both sides stay on one plan format.
+#
+#   scripts/sync-rewrite-bundle [<ts-checkout>]
+#
+# Default source: wt/ts. Builds `pnpm build:review` there, replaces
+# `thrds/rewrite_review/dist/` wholesale, and writes
+# `thrds/rewrite_review/BUNDLE_PROVENANCE` (source, commit + dirty flag, build
+# date). Then regenerates the checkout's `tests/fixtures/rewrite-{hashes,plan}.json`
+# from this side's `thrds.rewrite` (`scripts/rewrite_ts_fixtures.py`); a diff
+# there means the two sides' hashes or plans drifted.
+set -euo pipefail
+
+root="$(cd "$(dirname "$0")/.." && pwd)"
+src="${1:-$root/wt/ts}"
+
+[ -f "$src/src/plan-view/review.tsx" ] || { echo "no review page at $src/src/plan-view/review.tsx" >&2; exit 1; }
+
+echo "building the review bundle in $src" >&2
+(cd "$src" && pnpm build:review >&2)
+
+dist="$src/dist/review"
+[ -f "$dist/index.html" ] || { echo "build produced no $dist/index.html" >&2; exit 1; }
+
+rm -rf "$root/thrds/rewrite_review/dist"
+cp -R "$dist" "$root/thrds/rewrite_review/dist"
+
+sha="$(git -C "$src" rev-parse HEAD)"
+dirty=""
+[ -n "$(git -C "$src" status --porcelain -- src)" ] && dirty=" (dirty)"
+{
+  echo "source: thrds \`ts\` branch (src/plan-view/review.tsx, \`pnpm build:review\`)"
+  echo "commit: $sha$dirty"
+  echo "built:  $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+} > "$root/thrds/rewrite_review/BUNDLE_PROVENANCE"
+
+(cd "$root" && python scripts/rewrite_ts_fixtures.py "$src/tests/fixtures")
+git -C "$src" status --short -- tests/fixtures >&2

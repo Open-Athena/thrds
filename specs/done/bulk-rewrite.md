@@ -54,4 +54,17 @@ Decided (Ryan): one source, in React on the `ts` branch, vendored here.
   DOM typing lives in `tsconfig.plan-view.json`, so the main tsconfig keeps Node's `fetch` types. `pnpm build:review` bundles the standalone page (`src/plan-view/review.tsx` + `review.html`, React included) into `dist/review/`, outside `build`, so npm consumers don't get it.
 - **`py`**: `thrds/rewrite_review/` vendors that bundle (`dist/`, `BUNDLE_PROVENANCE`) and serves it: `GET /plan` (the review form), and `POST /check` / `POST /apply` (`{"ids": [...]}` → `{"outcomes": [...]}`). Those take only the plan's edit / repost ts, require `Content-Type: application/json` and a same-origin `Origin`, and bind 127.0.0.1. `slck rewrite review PLAN [-p PORT] [-r RECEIPTS] [-O]` (default port 3078) creates the Slack client on the first check or apply, using the same receipts as `apply`. Tests: `tests/test_rewrite_review.py`. Checked in Chrome against a fake channel: render, diff, check, select, confirm, apply, and phone width.
 
-Still open: Discord, streaming for very large plans, and TS parity for find / plan / apply (only the plan types are in TS today; disky's digest uses Python).
+## Phase 3, implemented: TS parity and a hosted backend
+
+For hosting the review inside an app (disky's `site/`, a Cloudflare Pages app) instead of on localhost.
+
+- **`ts`** (`38dd767`, dist `0.2.0-dist.38dd767`):
+  - `src/rewrite.ts` (browser-safe): `contentHash` (Python's `json.dumps(sort_keys=True, ensure_ascii=False)` via `pyJsonDumps`, then SHA-256 → 16 hex), `contentOf` / `senderOf`, `sameContent`, `substitute`, `verifyPlan` (checks recorded hashes, as `Plan.from_json`), `memoryReceipts`, `postRewrite` (the page posts a selection in batches of 10, reporting each batch's outcomes).
+  - `src/rewrite-slack.ts`: `findHistory` / `findThread` / `findIds`, `plan`, `apply`, and `rewriteHandler(request, {plan, client, receipts, maxBatch})`, `PlanView`'s backend for a Worker / Pages Function: `GET …/plan`, `POST …/check` / `…/apply`, with the same checks as the Python server plus a per-request cap (`maxBatch`, default 10; each action is 2–5 Slack calls, under a Worker request's subrequest cap). Kept out of `rewrite.ts` so the page bundle doesn't pull in the Slack client.
+  - `/d1`: `d1Receipts(db, planId)` and `rewriteReceiptsSchema()` (in `SCHEMA`): one row per outcome, per plan, so batches in separate requests (and re-runs) skip what's done.
+  - Tests (`tests/rewrite-slack.test.ts`) mirror `tests/test_rewrite.py`, plus parity: `contentHash` against Python-written hashes (unicode, control chars, nested blocks, senders, files), `verifyPlan` on a Python-written plan, and planning the same fake channel in TS gives that plan exactly.
+- **`py`**: `scripts/sync-rewrite-bundle` re-vendors the review page from a `ts` checkout (writing `BUNDLE_PROVENANCE`) and regenerates the TS parity fixtures there (`scripts/rewrite_ts_fixtures.py`); a fixture diff means the sides drifted. The page now posts through `postRewrite`.
+
+Numbers in blocks hash the same on both sides for ints; Slack's blocks carry no floats.
+
+Still open: Discord, and streaming for very large plans. disky's integration (where plans come from, where they're stored, the admin page) is disky's spec.
