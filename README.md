@@ -310,6 +310,30 @@ const serve = derivedAvatarHandler({ resolveFace: async (id) => (await slack.use
 - **Badges:** `BADGES` has presets (`automated`, `succeeded`, `failed`, `running`, …). A badge can also be `{ color, glyph }` or `{ color, image }`.
 - **Fallback faces:** `identiconPng(await identiconSeed(secret, email))` and `serviceIconPng()` are deterministic PNGs for people without a photo and for jobs. Pass `memoKey` so a byte face renders once.
 
+## Reviewing a bulk rewrite: `PlanView`
+
+A bulk rewrite brings an app's existing messages up to date after their look changes. The Python side finds the messages, renders them and applies the result (`slck rewrite plan / show / apply`; `thrds.rewrite` on the `py` branch). The plan it writes is JSON, one action per message: `edit`, `repost`, `noop`, `skip` or `blocked`. `parsePlan` and the `RewritePlan` types read that JSON. `PlanView` (`@open-athena/thrds/plan-view`, with React ≥ 18 as an optional peer) is the review UI:
+
+```tsx
+import { PlanView } from "@open-athena/thrds/plan-view";
+
+<PlanView
+  plan={plan}                       // `slck rewrite show -j plan.json`, or your backend's `Plan.review_json()`
+  outcomes={outcomes}               // by ts, from your last check / apply
+  onCheck={(sel) => api.check(sel)} // dry run on your backend
+  onApply={(sel) => api.apply(sel)} // your backend runs `apply(plan, client, dry_run=False, only=…)`
+  renderContent={(c, side, a) => (isFleetCard(a) ? <FleetCard content={c} /> : undefined)}
+  emoji={{ party: "https://…/party.png" }}
+/>
+```
+
+- **Filters:** by kind (all but `noop` at first) and by text or ts.
+- **Each row:** the message before and after, rendered as Slack would, or by `renderContent` when it returns something; a text diff; the sender change; and the outcome.
+- **Selection:** edits and reposts are selectable. `Apply` asks for confirmation inside the view before calling `onApply`. The view never writes to Slack itself, so it can sit behind an app's own auth.
+- **Styling:** `PLAN_VIEW_CSS`, `tpv-` classes, light and dark. Pass `unstyled` to style the classes yourself.
+
+`slck rewrite review plan.json` serves the same view standalone on localhost. Its bundle is built here with `pnpm build:review` into `dist/review/`, and the Python package vendors it.
+
 ## Testing
 
 ```ts

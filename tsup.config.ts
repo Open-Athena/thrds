@@ -9,9 +9,13 @@ export default defineConfig({
     kv: "src/kv.ts",
     receiver: "src/receiver.ts",
     testing: "src/testing.ts",
+    "plan-view": "src/plan-view/index.tsx",
   },
+  // React is an optional peer (only `./plan-view` uses it): never bundle it.
+  external: ["react", "react/jsx-runtime", "react-dom"],
   format: ["esm"],
-  dts: true,
+  // `./plan-view` is DOM code (`tsconfig.plan-view.json`); the main tsconfig leaves DOM out so `fetch` keeps Node's types.
+  dts: { compilerOptions: { lib: ["ES2022", "DOM", "DOM.Iterable"] } },
   sourcemap: true,
   clean: true,
   target: "node22",

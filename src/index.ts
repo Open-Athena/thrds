@@ -152,3 +152,24 @@ export {
   upsertFile,
   upsertFiles,
 } from "./slots";
+export type {
+  DiffLine,
+  PlannedAction,
+  RewriteContent,
+  RewriteKind,
+  RewriteOutcome,
+  RewritePlan,
+  RewriteSender,
+  RewriteStatus,
+} from "./rewrite";
+export {
+  PLAN_VERSION,
+  REWRITE_KINDS,
+  REWRITE_STATUSES,
+  describeSender,
+  lineDiff,
+  parsePlan,
+  planCounts,
+  senderChanged,
+  writes,
+} from "./rewrite";
