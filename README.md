@@ -388,6 +388,32 @@ thread:   +entirely new message
 
 Each `Action` carries `prior_content` (for EDIT/DELETE) alongside `content`, enabling colored unified-diff output via `action.format()`.
 
+### Bulk rewrite (Slack)
+
+Brings an app's existing messages up to date after it changes how its posts look (an emoji vocabulary, a label, a layout). You review the changes first. It works on messages thrds didn't post itself, chosen by the app (`thrds.rewrite`, `specs/bulk-rewrite.md`):
+
+```python
+from thrds.rewrite import Desired, Skip, apply, find_history, plan, substitute
+
+found = find_history(slack, "C0123", oldest="1790000000", include_replies=True)
+p = plan(found, substitute({":large_green_circle:": ":white_check_mark:"}))
+print(p.format_preview())       # or p.save("plan.json") for later review
+report = apply(p, slack)        # dry run: checks each message, writes nothing
+report = apply(p, slack, dry_run=False, receipts="plan.receipts.jsonl")
+```
+
+1. **Find:** `find_history` (optionally with replies), `find_thread` or `find_ids`. Each `Found` has the wire text, blocks, sender, files and its place in the thread. Only this token's own posts are included, matched by bot or user id, never by `username`.
+2. **Render:** the app's `render(found) -> Desired(text, blocks=None, sender=None) | Skip(reason)`, which re-derives the message from its own data. `substitute(mapping)` is a built-in render. It rewrites text and blocks, and renames `emoji` elements. It drops blocks that are only `rich_text`, so Slack re-derives them from the new text.
+3. **Plan:** pure, and serializable as JSON. Each message gets one action:
+   - `edit`;
+   - `repost`, when the sender changes, which `chat.update` can't do;
+   - `noop`;
+   - `skip`;
+   - `blocked`, for another author's message, a sender change on a message with replies or one that isn't last in its channel or thread (`reorder_ok` allows the move), or files under a new sender override.
+4. **Apply:** re-reads each message first. If its content no longer matches the planned hash, the action is `stale` and nothing is written. If it already shows the new content, it's `already`. Writes are paced, 1.2 s apart by default. A repost posts the new message before deleting the old one, keeping the old message's metadata and files. With `receipts`, a re-run skips what's done.
+
+CLI: `slck rewrite plan -c CHANNEL [-t TS | -i TS… | -a/-b bounds -w] (-s OLD=NEW… | -r MODULE:FN) -o plan.json`, then `slck rewrite show plan.json [-k edit] [-j]` (`-j` adds per-action diffs, for a review UI), then `slck rewrite apply plan.json [-y]`. Without `-y`, `apply` is a dry run.
+
 ### Features
 
 - **Foreign message preservation**: non-bot messages in threads are skipped during sync (no `cant_update_message` errors)

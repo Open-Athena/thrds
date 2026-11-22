@@ -2624,6 +2624,11 @@ def slack_permalink(channel: str, ts: str):
     click.echo(client.permalink(ts))
 
 
+from .rewrite_cli import rewrite_cli  # noqa: E402
+
+slack_cli.add_command(rewrite_cli)
+
+
 # ============================================================================
 # `thrds capture …` subgroup — gist-only trajectory, no platform target.
 # ============================================================================
