@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { B as Block, e as RewriteContent, h as RewritePlan, g as RewriteOutcome, c as PlannedAction, f as RewriteKind } from './rewrite-om9GpQIC.js';
+import { B as Block, j as RewriteContent, n as RewritePlan, m as RewriteOutcome, f as PlannedAction, l as RewriteKind } from './rewrite-B4eVRuW2.js';
 
 /**
  * A Slack message rendered as React elements for review: wire mrkdwn (bold, italic, strike, code, links, mentions,
@@ -43,8 +43,9 @@ declare const PLAN_VIEW_CSS = "\n.tpv {\n  --tpv-bg: #ffffff;\n  --tpv-fg: #1d1c
  *
  * Lists the plan's actions with kind filters and a text filter. Each action shows the message before and after,
  * rendered as Slack would (or by the app's `renderContent`), or as a text diff. The edits and reposts you select go to
- * `onApply` (and `onCheck`, a dry run). The app's backend runs the apply (Python `thrds.rewrite.apply`), so the view
- * works behind the app's own auth. Outcomes passed back show on each row.
+ * `onApply` (and `onCheck`, a dry run). The app's backend runs the apply (`rewriteHandler` in a Worker, or Python
+ * `thrds.rewrite.apply`), so the view works behind the app's own auth; `postRewrite` posts a selection to it in
+ * batches. Outcomes passed back show on each row.
  */
 
 interface PlanViewProps {

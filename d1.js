@@ -24,8 +24,19 @@ var avatarsSchema = (table = "public_avatars") => `CREATE TABLE IF NOT EXISTS ${
   data TEXT NOT NULL,
   created_at INTEGER NOT NULL
 );`;
+var rewriteReceiptsSchema = (table = "thrds_rewrite_receipts") => `CREATE TABLE IF NOT EXISTS ${ident(table)} (
+  plan TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  new_ts TEXT,
+  error TEXT,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ${ident(table)}_plan ON ${ident(table)} (plan, status);`;
 var SCHEMA = `${slotsSchema()}
 ${avatarsSchema()}
+${rewriteReceiptsSchema()}
 `;
 var EMPTY = { slots: {} };
 var nowS = () => Math.floor(Date.now() / 1e3);
@@ -100,11 +111,26 @@ function sqliteD1(db) {
   });
   return { prepare: (sql) => stmt(sql) };
 }
+function d1Receipts(db, plan, options = {}) {
+  const t = ident(options.table ?? "thrds_rewrite_receipts");
+  const now = options.now ?? nowS;
+  return {
+    async done() {
+      const row = await db.prepare(`SELECT group_concat(ts, ' ') AS tss FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`).bind(plan).first();
+      return new Set(row?.tss ? row.tss.split(" ") : []);
+    },
+    async record(o) {
+      await db.prepare(`INSERT INTO ${t} (plan, ts, kind, status, new_ts, error, at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(plan, o.ts, o.kind, o.status, o.new_ts ?? null, o.error ?? null, now()).run();
+    }
+  };
+}
 export {
   SCHEMA,
   avatarsSchema,
   d1AvatarStore,
+  d1Receipts,
   d1Store,
+  rewriteReceiptsSchema,
   slotsSchema,
   sqliteD1
 };

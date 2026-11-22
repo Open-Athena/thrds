@@ -1,4 +1,5 @@
 import { AvatarStore } from './avatar.js';
+import { o as RewriteReceipts } from './rewrite-B4eVRuW2.js';
 import { j as SlotStore } from './slots-CrmBIIZI.js';
 import './core-BNb_OG-w.js';
 import './slack-DsYQB40e.js';
@@ -25,6 +26,8 @@ interface D1Like {
 declare const slotsSchema: (table?: string) => string;
 /** disky's `public_avatars` table, unchanged, so an existing table keeps working. */
 declare const avatarsSchema: (table?: string) => string;
+/** Bulk-rewrite receipts (`d1Receipts`): every outcome of a real apply, per plan. */
+declare const rewriteReceiptsSchema: (table?: string) => string;
 declare const SCHEMA: string;
 /**
  * Slot state in D1, one row per thread key. `claim` is a compare-and-swap on the row's lease (free, or expired), and a
@@ -52,5 +55,14 @@ interface SqliteLike {
  * tests: `d1Store(sqliteD1(new DatabaseSync("bot.db")))`. Create the tables with `SCHEMA` first.
  */
 declare function sqliteD1(db: SqliteLike): D1Like;
+/**
+ * A bulk rewrite's receipts in D1, keyed by `plan` (any id naming the plan: its storage key, or a hash of it): each
+ * real outcome is a row, and `done()` is the ts already `done` / `already`, so a re-run (or the next batch's request)
+ * skips them.
+ */
+declare function d1Receipts(db: D1Like, plan: string, options?: {
+    table?: string;
+    now?: () => number;
+}): RewriteReceipts;
 
-export { type D1Like, type D1Statement, SCHEMA, type SqliteLike, avatarsSchema, d1AvatarStore, d1Store, slotsSchema, sqliteD1 };
+export { type D1Like, type D1Statement, SCHEMA, type SqliteLike, avatarsSchema, d1AvatarStore, d1Receipts, d1Store, rewriteReceiptsSchema, slotsSchema, sqliteD1 };

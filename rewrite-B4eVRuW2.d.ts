@@ -167,11 +167,20 @@ declare const rich: {
 };
 
 /**
- * Bulk-rewrite plans: the JSON a `thrds slack rewrite plan` (Python `thrds.rewrite`) writes, typed for review UIs.
+ * Bulk rewrite: find an app's Slack messages, re-render them, review the plan, apply it. The TS twin of Python
+ * `thrds.rewrite` (`specs/done/bulk-rewrite.md` on the `py` branch): the same plan JSON, the same content hash, so a
+ * plan either side writes, the other applies.
  *
- * One action per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `noop`, `skip` (the
- * app's reason) or `blocked` (what Slack can't do). `review_json()` / `slck rewrite show -j` add each action's text
- * `diff` and the `counts`. See `specs/done/bulk-rewrite.md` on the `py` branch.
+ * 1. **Find** (`findHistory` / `findThread` / `findIds`): the messages in scope, as `RewriteFound`.
+ * 2. **Plan** (`plan(found, render)`): the app's `render(found) -> Desired | Skip` re-derives each message; one action
+ *    per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `noop`, `skip` (the app's
+ *    reason) or `blocked` (what Slack can't do), each recording the message's content hash.
+ * 3. **Apply** (`apply(plan, client)`): a dry run unless `dryRun: false`; each action re-reads its message and refuses
+ *    it once its hash moved (`stale`). Writes are paced; `receipts` (`memoryReceipts`, `/d1`'s `d1Receipts`) make a
+ *    re-run skip what's done.
+ *
+ * This module is the browser-safe half (types, content hashing, `substitute`, `postRewrite`); the Slack half (find,
+ * `plan`, `apply`, `rewriteHandler`) is `./rewrite-slack`, so a page bundling `PlanView` doesn't pull in the client.
  */
 
 declare const PLAN_VERSION = 1;
@@ -234,5 +243,81 @@ interface DiffLine {
 }
 /** Line diff of `a` → `b` (longest common subsequence): unchanged, removed and added lines in order. */
 declare function lineDiff(a: string, b: string): DiffLine[];
+/** `json.dumps(value, sort_keys=True, ensure_ascii=False)`: Python's separators, keys sorted at every level. Numbers
+ *  print as JS does, which matches Python for ints (Slack's blocks carry no floats). */
+declare function pyJsonDumps(value: unknown): string;
+/** A message's content hash: the first 16 hex digits of the SHA-256 of its `pyJsonDumps`, as Python's `Content.hash`. */
+declare function contentHash(c: RewriteContent): Promise<string>;
+/** A raw Slack message, as `conversations.history` / `replies` return it. */
+type RawSlackMessage = Record<string, unknown> & {
+    ts: string;
+};
+/** The override a read message shows: `username`, and `icons.emoji` or an `icons.image_*` URL. Only a `bot_message`
+ *  carries one; an app's plain post has `icons` for its own avatar, which isn't one. */
+declare function senderOf(m: Record<string, unknown>): RewriteSender;
+declare function contentOf(m: Record<string, unknown>): RewriteContent;
+/** `live` (as read) already shows `want`: block ids ignored (Slack assigns them); a text-only `want` matches live
+ *  blocks that are only `rich_text`. */
+declare function sameContent(live: RewriteContent, want: RewriteContent): boolean;
+/** A message in scope, as read from Slack. `threadTs`: the parent's ts for a reply, null for a top-level message.
+ *  `last`: the newest in its container (the channel's top level, or its thread); only then can a repost keep its
+ *  place. `ours`: posted by this token's bot / user. */
+interface RewriteFound {
+    channel: string;
+    ts: string;
+    threadTs: string | null;
+    content: RewriteContent;
+    ours: boolean;
+    last: boolean;
+    replyCount: number;
+    subtype: string | null;
+    metadata: unknown;
+    raw: RawSlackMessage;
+}
+/** What a message should show. `blocks` absent / null: text only. `sender` absent / null: keep its sender. */
+interface Desired {
+    text: string;
+    blocks?: Block[] | null;
+    sender?: RewriteSender | null;
+}
+/** The app leaves this message alone, for `skip` (the reason). */
+interface Skip {
+    skip: string;
+}
+type Render = (found: RewriteFound) => Desired | Skip | Promise<Desired | Skip>;
+/** `parsePlan`, then each action's recorded hash checked against its old content (as Python's `Plan.from_json`). */
+declare function verifyPlan(json: unknown): Promise<RewritePlan>;
+/** Where outcomes of real runs go, so a re-run skips what's `done` / `already`. */
+interface RewriteReceipts {
+    /** The ts already `done` or `already`. */
+    done(): Promise<Set<string>>;
+    record(o: RewriteOutcome): Promise<void>;
+}
+/** Receipts in memory (tests, one-request runs). */
+declare function memoryReceipts(initial?: RewriteOutcome[]): RewriteReceipts & {
+    outcomes: RewriteOutcome[];
+};
+/** `chat.update` / `chat.delete` are Slack tier 3 (~50/min), `chat.postMessage` ~1/s per channel: 1.2 s between
+ *  writes stays under both. */
+declare const DEFAULT_PACE_MS = 1200;
+/**
+ * A render replacing each `mapping` key with its value, in the text and the blocks. Blocks that are only `rich_text`
+ * are dropped (Slack re-derives them from the new text); other blocks have their strings substituted, and an `emoji`
+ * element named `x` becomes `y` when `:x:` maps to `:y:`.
+ */
+declare function substitute(mapping: Record<string, string>): Render;
+/** How many actions one `check` / `apply` request takes: each is 2–5 Slack calls, and a Worker request has a
+ *  subrequest cap (50 free, 1000 paid). `postRewrite` batches to it. */
+declare const DEFAULT_BATCH = 10;
+/**
+ * The page's side of `rewriteHandler` (or `slck rewrite review`): POST `ids` to `endpoint` (`…/check` or `…/apply`)
+ * `batch` at a time, in order, calling `onOutcomes` after each batch; resolves to every outcome. Throws on the first
+ * refused batch (what was applied before it stays applied, and its receipts say so).
+ */
+declare function postRewrite(endpoint: string, ids: readonly string[], options?: {
+    batch?: number;
+    fetch?: typeof fetch;
+    onOutcomes?: (os: RewriteOutcome[]) => void;
+}): Promise<RewriteOutcome[]>;
 
-export { input as A, type Block as B, lineDiff as C, type DiffLine as D, link as E, mention as F, modal as G, mrkdwnText as H, option as I, parsePlan as J, plainText as K, plainTextInput as L, planCounts as M, rich as N, section as O, PLAN_VERSION as P, senderChanged as Q, REWRITE_KINDS as R, staticSelect as S, usersSelect as T, versionedUrl as U, withoutImages as V, writes as W, type ButtonOptions as a, PRIVATE_METADATA_MAX as b, type PlannedAction as c, REWRITE_STATUSES as d, type RewriteContent as e, type RewriteKind as f, type RewriteOutcome as g, type RewritePlan as h, type RewriteSender as i, type RewriteStatus as j, type RichStyle as k, actions as l, bound as m, button as n, context as o, date as p, datePicker as q, decodePrivateMetadata as r, describeSender as s, divider as t, encodePrivateMetadata as u, escape as v, fitsPrivateMetadata as w, header as x, image as y, imageElement as z };
+export { pyJsonDumps as $, decodePrivateMetadata as A, type Block as B, describeSender as C, DEFAULT_BATCH as D, divider as E, encodePrivateMetadata as F, escape as G, fitsPrivateMetadata as H, header as I, image as J, imageElement as K, input as L, lineDiff as M, link as N, memoryReceipts as O, PLAN_VERSION as P, mention as Q, REWRITE_KINDS as R, type Skip as S, modal as T, mrkdwnText as U, option as V, parsePlan as W, plainText as X, plainTextInput as Y, planCounts as Z, postRewrite as _, type ButtonOptions as a, rich as a0, sameContent as a1, section as a2, senderChanged as a3, senderOf as a4, staticSelect as a5, substitute as a6, usersSelect as a7, verifyPlan as a8, versionedUrl as a9, withoutImages as aa, writes as ab, DEFAULT_PACE_MS as b, type Desired as c, type DiffLine as d, PRIVATE_METADATA_MAX as e, type PlannedAction as f, REWRITE_STATUSES as g, type RawSlackMessage as h, type Render as i, type RewriteContent as j, type RewriteFound as k, type RewriteKind as l, type RewriteOutcome as m, type RewritePlan as n, type RewriteReceipts as o, type RewriteSender as p, type RewriteStatus as q, type RichStyle as r, actions as s, bound as t, button as u, contentHash as v, contentOf as w, context as x, date as y, datePicker as z };

@@ -51,6 +51,10 @@ function fakeChannel(options = {}) {
   let f = 100;
   const writes = [];
   const err = (error) => ({ body: { ok: false, error } });
+  const withReplyCount = (m) => {
+    const replies = messages.filter((x) => x.thread_ts === m.ts && x.ts !== m.ts).length;
+    return replies > 0 && !(m.thread_ts && m.thread_ts !== m.ts) ? { ...m, reply_count: replies } : m;
+  };
   const routes = {
     "auth.test": AUTH,
     "chat.postMessage": ({ body }) => {
@@ -60,6 +64,9 @@ function fakeChannel(options = {}) {
       if (body["thread_ts"]) m.thread_ts = body["thread_ts"];
       if (body["username"]) m.username = body["username"];
       if (body["username"] || body["icon_url"] || body["icon_emoji"]) m.subtype = "bot_message";
+      if (body["icon_emoji"]) m.icons = { emoji: body["icon_emoji"] };
+      else if (body["icon_url"]) m.icons = { image_48: body["icon_url"] };
+      if (body["thread_ts"] && body["reply_broadcast"]) m.subtype = "thread_broadcast";
       if (body["blocks"]) m.blocks = body["blocks"];
       if (body["metadata"]) m.metadata = body["metadata"];
       messages.push(m);
@@ -98,7 +105,8 @@ function fakeChannel(options = {}) {
       const ts = body["ts"];
       const parent = messages.find((x) => x.ts === ts);
       if (!parent) return err("thread_not_found");
-      return { body: { ok: true, messages: [parent, ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)] } };
+      const thread = [withReplyCount(parent), ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)];
+      return { body: { ok: true, messages: body["limit"] === void 0 ? thread : thread.slice(0, Number(body["limit"])) } };
     },
     "files.getUploadURLExternal": ({ body }) => {
       const id = `F${++f}`;
@@ -153,8 +161,9 @@ function fakeChannel(options = {}) {
     },
     "conversations.history": ({ body }) => {
       const oldest = Number(body["oldest"] ?? 0);
-      const top = messages.filter((x) => !x.thread_ts && Number(x.ts) >= oldest).reverse();
-      return { body: { ok: true, messages: top } };
+      const latest = body["latest"] === void 0 ? Infinity : Number(body["latest"]);
+      const top = messages.filter((x) => (!x.thread_ts || x.thread_ts === x.ts || x.subtype === "thread_broadcast") && Number(x.ts) >= oldest && Number(x.ts) < latest).reverse().map(withReplyCount);
+      return { body: { ok: true, messages: body["limit"] === void 0 ? top : top.slice(0, Number(body["limit"])) } };
     }
   };
   const intercepted = {};

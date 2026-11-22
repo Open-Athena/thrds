@@ -48,16 +48,31 @@ import {
   stableStringify
 } from "./chunk-3ZH5IQC7.js";
 import {
+  DEFAULT_BATCH,
+  DEFAULT_PACE_MS,
   PLAN_VERSION,
+  POST_SUBTYPES,
   REWRITE_KINDS,
   REWRITE_STATUSES,
+  contentHash,
+  contentOf,
   describeSender,
+  foundOf,
+  isOverride,
   lineDiff,
+  memoryReceipts,
   parsePlan,
   planCounts,
+  postRewrite,
+  pyJsonDumps,
+  sameContent,
+  sameSender,
   senderChanged,
+  senderOf,
+  substitute,
+  verifyPlan,
   writes
-} from "./chunk-CEG2USOK.js";
+} from "./chunk-L4VEQWK7.js";
 
 // src/mrkdwn.ts
 var escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -87,8 +102,8 @@ ${ellipsis}`;
     const cut = chars.slice(0, room).join("").lastIndexOf("\n");
     if (cut >= 0 && [...text.slice(0, cut)].length >= room / 2) return text.slice(0, cut) + tail;
   }
-  const keep = Math.max(0, max - [...ellipsis].length);
-  return chars.slice(0, keep).join("") + ellipsis;
+  const keep2 = Math.max(0, max - [...ellipsis].length);
+  return chars.slice(0, keep2).join("") + ellipsis;
 }
 var mrkdwnText = (text) => ({ type: "mrkdwn", text });
 var plainText = (text, emoji = true) => ({ type: "plain_text", text, emoji });
@@ -555,8 +570,8 @@ async function syncSlots(client, store, thread, options = {}) {
               parentTs = "";
               return;
             }
-            const keep = isKeep(parent);
-            const r = await reconcile(tagSlot(keep ? parent.keep : parent, key, null), null, state.parent, { keep, ...parentFallback });
+            const keep2 = isKeep(parent);
+            const r = await reconcile(tagSlot(keep2 ? parent.keep : parent, key, null), null, state.parent, { keep: keep2, ...parentFallback });
             parentTs = r.ts;
             if (attempt > 0) actions2[start].type = "REPOST";
             if (r.reposted) {
@@ -758,9 +773,286 @@ function threadStore(client, threadTs) {
     }
   };
 }
+
+// src/rewrite-slack.ts
+var keep = (f, includeForeign) => includeForeign || f.ours && POST_SUBTYPES.includes(f.subtype);
+async function newestTopLevel(client, channel) {
+  const r = await client.api("conversations.history", { channel, limit: 1 }, { get: true });
+  const messages = r["messages"] ?? [];
+  return messages[0]?.ts ?? null;
+}
+async function threadRaw(client, channel, threadTs) {
+  const out = [];
+  for await (const m of client.paginate(
+    "conversations.replies",
+    { channel, ts: threadTs, include_all_metadata: true, limit: 200 },
+    "messages",
+    { get: true }
+  )) out.push(m);
+  return out;
+}
+async function threadReplies(client, channel, threadTs, ids) {
+  const replies = (await threadRaw(client, channel, threadTs)).filter((r) => r.ts !== threadTs);
+  const last = replies.at(-1)?.ts;
+  return replies.map((r) => foundOf(r, channel, ids, r.ts === last));
+}
+async function findHistory(client, options = {}) {
+  const channel = options.channel ?? client.channel;
+  const includeForeign = options.includeForeign ?? false;
+  const ids = await client.botIds();
+  const params = { channel, include_all_metadata: true, limit: 200 };
+  if (options.oldest !== void 0) params["oldest"] = options.oldest;
+  if (options.latest !== void 0) params["latest"] = options.latest;
+  let newest;
+  const out = [];
+  const seen = /* @__PURE__ */ new Set();
+  for await (const m of client.paginate("conversations.history", params, "messages", { get: true })) {
+    if (newest === void 0) newest = options.latest === void 0 ? m.ts : await newestTopLevel(client, channel);
+    if (!seen.has(m.ts)) {
+      seen.add(m.ts);
+      const f = foundOf(m, channel, ids, m.ts === newest);
+      if (keep(f, includeForeign)) out.push(f);
+    }
+    if (options.includeReplies && typeof m["reply_count"] === "number" && m["reply_count"] > 0) {
+      for (const f of await threadReplies(client, channel, m.ts, ids)) {
+        if (!seen.has(f.ts) && keep(f, includeForeign)) out.push(f);
+        seen.add(f.ts);
+      }
+    }
+  }
+  return out;
+}
+async function findThread(client, threadTs, options = {}) {
+  const channel = options.channel ?? client.channel;
+  const includeForeign = options.includeForeign ?? false;
+  const ids = await client.botIds();
+  const raw = await threadRaw(client, channel, threadTs);
+  const out = [];
+  if (raw[0]?.ts === threadTs) {
+    const parent = foundOf(raw[0], channel, ids, await newestTopLevel(client, channel) === threadTs);
+    if (keep(parent, includeForeign)) out.push(parent);
+  }
+  const last = raw.filter((r) => r.ts !== threadTs).at(-1)?.ts;
+  for (const r of raw) {
+    if (r.ts === threadTs) continue;
+    const f = foundOf(r, channel, ids, r.ts === last);
+    if (keep(f, includeForeign)) out.push(f);
+  }
+  return out;
+}
+async function readMessage(client, channel, ts) {
+  let r;
+  try {
+    r = await client.api("conversations.replies", { channel, ts, limit: 1, include_all_metadata: true }, { get: true });
+  } catch (e) {
+    if (e instanceof SlackApiError && (e.code === "thread_not_found" || e.code === "message_not_found")) return null;
+    throw e;
+  }
+  const m = (r["messages"] ?? [])[0];
+  return m !== void 0 && m.ts === ts ? m : null;
+}
+async function isLast(client, channel, ts, threadTs) {
+  if (threadTs === null) return await newestTopLevel(client, channel) === ts;
+  const replies = (await threadRaw(client, channel, threadTs)).filter((r) => r.ts !== threadTs);
+  return replies.at(-1)?.ts === ts;
+}
+async function findIds(client, tss, options = {}) {
+  const channel = options.channel ?? client.channel;
+  const ids = await client.botIds();
+  const out = [];
+  for (const ts of tss) {
+    const m = await readMessage(client, channel, ts);
+    if (m === null) throw new Error(`no message ${ts} in ${channel}`);
+    const parent = m["thread_ts"];
+    const threadTs = typeof parent === "string" && parent !== ts ? parent : null;
+    out.push(foundOf(m, channel, ids, await isLast(client, channel, ts, threadTs)));
+  }
+  return out;
+}
+async function plan(found, render, options = {}) {
+  const actions2 = [];
+  for (const f of found) {
+    const hash = await contentHash(f.content);
+    const action = (kind, extra = {}) => {
+      const a = {
+        kind,
+        channel: f.channel,
+        ts: f.ts,
+        thread_ts: f.threadTs,
+        hash,
+        old: f.content,
+        new: extra.new ?? null,
+        reason: extra.reason ?? null
+      };
+      if (f.subtype === "thread_broadcast") a.broadcast = true;
+      if (extra.metadata !== void 0 && extra.metadata !== null) a.metadata = extra.metadata;
+      return a;
+    };
+    if (!f.ours) {
+      actions2.push(action("blocked", { reason: "another app's or a person's message" }));
+      continue;
+    }
+    if (!POST_SUBTYPES.includes(f.subtype)) {
+      actions2.push(action("blocked", { reason: `a ${f.subtype} message` }));
+      continue;
+    }
+    const r = await render(f);
+    if ("skip" in r) {
+      actions2.push(action("skip", { reason: r.skip }));
+      continue;
+    }
+    const next = {
+      text: r.text,
+      blocks: r.blocks ?? null,
+      sender: r.sender ?? f.content.sender,
+      files: f.content.files
+    };
+    if (sameContent(f.content, next)) {
+      actions2.push(action("noop", { new: next }));
+      continue;
+    }
+    if (next.text.length > SLACK_MESSAGE_LIMIT) {
+      actions2.push(action("blocked", { new: next, reason: `new text is ${next.text.length} chars, over ${SLACK_MESSAGE_LIMIT}` }));
+      continue;
+    }
+    if (sameSender(next.sender, f.content.sender)) {
+      actions2.push(action("edit", { new: next }));
+      continue;
+    }
+    const where = f.threadTs === null ? "channel" : "thread";
+    let reason = null;
+    if (f.replyCount > 0) reason = `the sender changes, and a repost would orphan its ${f.replyCount} replies`;
+    else if (!f.last && !options.reorderOk) reason = `the sender changes, and a repost would move it to the end of its ${where}`;
+    else if (next.files.length > 0 && isOverride(next.sender)) reason = "the sender changes to an override, and Slack shows no files on those";
+    actions2.push(reason === null ? action("repost", { new: next, metadata: f.metadata }) : action("blocked", { new: next, reason }));
+  }
+  return { thrds_rewrite_plan: PLAN_VERSION, actions: actions2 };
+}
+var defaultSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
+function updatePayload(a, next) {
+  return { channel: a.channel, ts: a.ts, text: next.text, blocks: next.blocks ?? [] };
+}
+function postPayload(a, next) {
+  const data = { channel: a.channel, text: next.text, unfurl_links: false, unfurl_media: false };
+  if (next.blocks && next.blocks.length > 0) data["blocks"] = next.blocks;
+  if (a.thread_ts !== null) {
+    data["thread_ts"] = a.thread_ts;
+    if (a.broadcast) data["reply_broadcast"] = true;
+  }
+  const s = next.sender;
+  if (s.username !== null) data["username"] = s.username;
+  if (s.icon_url !== null) data["icon_url"] = s.icon_url;
+  else if (s.icon_emoji !== null) data["icon_emoji"] = s.icon_emoji;
+  if (a.metadata !== void 0 && a.metadata !== null) data["metadata"] = a.metadata;
+  return data;
+}
+var outcome = (a, status, extra = {}) => ({
+  ts: a.ts,
+  kind: a.kind,
+  status,
+  ...extra
+});
+var errorCode = (e) => e instanceof SlackApiError ? e.code : e instanceof Error ? e.message : String(e);
+async function applyOne(client, a, dryRun) {
+  const next = a.new;
+  if (await contentHash(a.old) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
+  const m = await readMessage(client, a.channel, a.ts);
+  if (m === null) return outcome(a, "gone");
+  const live = contentOf(m);
+  if (sameContent(live, next)) return outcome(a, "already");
+  if (await contentHash(live) !== a.hash) return outcome(a, "stale", { error: "changed since planning" });
+  if (a.kind === "repost") {
+    const replies = typeof m["reply_count"] === "number" ? m["reply_count"] : 0;
+    if (replies > 0) return outcome(a, "stale", { error: `now has ${replies} replies` });
+    if (!await isLast(client, a.channel, a.ts, a.thread_ts)) return outcome(a, "stale", { error: "no longer the newest; a repost would move it" });
+    if (isOverride(next.sender) && client.token.startsWith("xoxp-")) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-\u2026)" });
+  }
+  if (dryRun) return outcome(a, "pending");
+  let newTs;
+  try {
+    if (a.kind === "edit") {
+      await client.api("chat.update", updatePayload(a, next));
+      return outcome(a, "done");
+    }
+    newTs = (await client.api("chat.postMessage", postPayload(a, next)))["ts"];
+    if (next.files.length > 0) {
+      await client.api("chat.update", { channel: a.channel, ts: newTs, text: next.text, file_ids: next.files });
+    }
+  } catch (e) {
+    return outcome(a, "failed", { error: errorCode(e) });
+  }
+  try {
+    await client.api("chat.delete", { channel: a.channel, ts: a.ts });
+  } catch (e) {
+    return outcome(a, "undeleted", { new_ts: newTs, error: errorCode(e) });
+  }
+  return outcome(a, "done", { new_ts: newTs });
+}
+async function apply(p, client, options = {}) {
+  const { dryRun = true, receipts, paceMs = DEFAULT_PACE_MS, jitterMs = 0, sleep = defaultSleep2, onOutcome } = options;
+  const selected = options.only === void 0 ? null : new Set(options.only);
+  const done = receipts === void 0 ? /* @__PURE__ */ new Set() : await receipts.done();
+  const out = [];
+  let wrote = false;
+  for (const a of p.actions) {
+    if (!writes(a) || selected !== null && !selected.has(a.ts)) continue;
+    let o;
+    if (done.has(a.ts)) o = outcome(a, "receipt");
+    else {
+      if (wrote && paceMs > 0) await sleep(paceMs + Math.random() * jitterMs);
+      o = await applyOne(client, a, dryRun);
+      wrote = o.status === "done" || o.status === "undeleted";
+      if (receipts !== void 0 && !dryRun) await receipts.record(o);
+    }
+    out.push(o);
+    await onOutcome?.(o);
+  }
+  return out;
+}
+var jsonResponse = (status, body) => new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8" } });
+async function rewriteHandler(request, options) {
+  const url = new URL(request.url);
+  const op = url.pathname.replace(/\/+$/, "").split("/").at(-1);
+  const p = typeof options.plan === "function" ? await options.plan() : options.plan;
+  if (request.method === "GET" && op === "plan") {
+    return jsonResponse(200, { path: options.name ?? "plan", plan: { ...p, counts: planCounts(p) } });
+  }
+  if (request.method !== "POST" || op !== "check" && op !== "apply") return jsonResponse(404, { error: `not found: ${request.method} ${url.pathname}` });
+  if ((request.headers.get("Content-Type") ?? "").split(";")[0].trim() !== "application/json") {
+    return jsonResponse(415, { error: "expected Content-Type: application/json" });
+  }
+  const origin = request.headers.get("Origin");
+  if (origin !== null && origin !== url.origin) return jsonResponse(403, { error: `cross-origin request from ${origin}` });
+  let ids;
+  try {
+    ids = (await request.json()).ids;
+  } catch (e) {
+    return jsonResponse(400, { error: `bad request: ${e instanceof Error ? e.message : String(e)}` });
+  }
+  if (!Array.isArray(ids) || !ids.every((i) => typeof i === "string")) {
+    return jsonResponse(400, { error: "bad request: ids must be a list of ts strings" });
+  }
+  const maxBatch = options.maxBatch ?? DEFAULT_BATCH;
+  if (ids.length > maxBatch) return jsonResponse(413, { error: `${ids.length} ids; at most ${maxBatch} per request` });
+  const known = new Set(p.actions.filter(writes).map((a) => a.ts));
+  const unknown = ids.filter((i) => !known.has(i));
+  if (unknown.length > 0) return jsonResponse(400, { error: `not edits or reposts in this plan: ${unknown.join(", ")}` });
+  try {
+    const client = typeof options.client === "function" ? await options.client() : options.client;
+    const applyOptions = { dryRun: op === "check", only: ids };
+    if (options.receipts !== void 0) applyOptions.receipts = options.receipts;
+    if (options.paceMs !== void 0) applyOptions.paceMs = options.paceMs;
+    if (options.sleep !== void 0) applyOptions.sleep = options.sleep;
+    return jsonResponse(200, { outcomes: await apply(p, client, applyOptions) });
+  } catch (e) {
+    return jsonResponse(500, { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
+  }
+}
 export {
   CHANNEL_TTL_MS,
   CustomSenderFilesError,
+  DEFAULT_BATCH,
+  DEFAULT_PACE_MS,
   EditRateLimited,
   FILE_HASHES,
   FileNotProcessedError,
@@ -786,6 +1078,7 @@ export {
   USERNAME_MAX,
   USER_TTL_MS,
   actions,
+  apply,
   assertFilesAttachable,
   attachedFiles,
   bound,
@@ -794,7 +1087,9 @@ export {
   buildSummaryMessages,
   button,
   collect,
+  contentHash,
   contentKey,
+  contentOf,
   context,
   date,
   datePicker,
@@ -805,6 +1100,9 @@ export {
   divider,
   encodePrivateMetadata,
   escape,
+  findHistory,
+  findIds,
+  findThread,
   fitsPrivateMetadata,
   hash53,
   header,
@@ -816,6 +1114,7 @@ export {
   isRich,
   lineDiff,
   link,
+  memoryReceipts,
   memoryStore,
   mention,
   modal,
@@ -830,16 +1129,24 @@ export {
   permalinksIn,
   plainText,
   plainTextInput,
+  plan,
   planCounts,
+  postRewrite,
+  pyJsonDumps,
+  readMessage,
+  rewriteHandler,
   rich,
+  sameContent,
   section,
   senderChanged,
+  senderOf,
   senderOverrides,
   slackApi,
   slackCall,
   splitBody,
   stableStringify,
   staticSelect,
+  substitute,
   swapFiles,
   sync,
   syncSlots,
@@ -851,6 +1158,7 @@ export {
   upsertFile,
   upsertFiles,
   usersSelect,
+  verifyPlan,
   versionedUrl,
   webClientTransport,
   withFiles,

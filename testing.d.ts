@@ -69,6 +69,8 @@ interface FakeMessage {
         id: string;
         name: string;
     }>;
+    /** A `bot_message`'s icon override: `{ emoji }`, or `{ image_48 }` for an `icon_url`. */
+    icons?: Record<string, string>;
 }
 /** An uploaded file in a `fakeChannel`. */
 interface FakeFile {
