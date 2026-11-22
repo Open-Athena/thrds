@@ -3,7 +3,7 @@
  *
  * One action per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `noop`, `skip` (the
  * app's reason) or `blocked` (what Slack can't do). `review_json()` / `slck rewrite show -j` add each action's text
- * `diff` and the `counts`. See `specs/bulk-rewrite.md` on the `py` branch.
+ * `diff` and the `counts`. See `specs/done/bulk-rewrite.md` on the `py` branch.
  */
 import type { Block } from "./mrkdwn.js";
 
