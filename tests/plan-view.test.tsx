@@ -1,9 +1,9 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
 import { Diff, Mrkdwn, PlanView, SlackMessage, BlockView } from "../src/plan-view/index";
-import type { PlannedAction, RewriteContent, RewritePlan } from "../src/rewrite";
+import type { PlannedAction, RewriteContent, RewritePlan, RewriteSender } from "../src/rewrite";
 
-const noSender = { username: null, icon_url: null, icon_emoji: null };
+const noSender: RewriteSender = { username: null, icon_url: null, icon_emoji: null };
 const content = (text: string, extra: Partial<RewriteContent> = {}): RewriteContent => ({ text, blocks: null, sender: noSender, files: [], ...extra });
 const html = (node: React.ReactNode) => renderToStaticMarkup(<>{node}</>);
 

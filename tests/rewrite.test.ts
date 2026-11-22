@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
-import { describeSender, lineDiff, parsePlan, planCounts, senderChanged, writes, type PlannedAction, type RewriteContent } from "../src/index";
+import { describeSender, lineDiff, parsePlan, planCounts, senderChanged, writes, type PlannedAction, type RewriteContent, type RewriteSender } from "../src/index";
 
-const noSender = { username: null, icon_url: null, icon_emoji: null };
+const noSender: RewriteSender = { username: null, icon_url: null, icon_emoji: null };
 const content = (text: string, sender = noSender): RewriteContent => ({ text, blocks: null, sender, files: [] });
 const action = (ts: string, kind: PlannedAction["kind"], old: RewriteContent, next: RewriteContent | null, reason: string | null = null): PlannedAction => ({
   kind,
