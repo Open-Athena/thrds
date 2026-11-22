@@ -153,23 +153,42 @@ export {
   upsertFiles,
 } from "./slots";
 export type {
+  Desired,
   DiffLine,
   PlannedAction,
+  RawSlackMessage,
+  Render,
   RewriteContent,
+  RewriteFound,
   RewriteKind,
   RewriteOutcome,
   RewritePlan,
+  RewriteReceipts,
   RewriteSender,
   RewriteStatus,
+  Skip,
 } from "./rewrite";
 export {
+  DEFAULT_BATCH,
+  DEFAULT_PACE_MS,
   PLAN_VERSION,
   REWRITE_KINDS,
   REWRITE_STATUSES,
+  contentHash,
+  contentOf,
   describeSender,
   lineDiff,
+  memoryReceipts,
   parsePlan,
   planCounts,
+  postRewrite,
+  pyJsonDumps,
+  sameContent,
   senderChanged,
+  senderOf,
+  substitute,
+  verifyPlan,
   writes,
 } from "./rewrite";
+export type { ApplyOptions, FindOptions, RewriteHandlerOptions } from "./rewrite-slack";
+export { apply, findHistory, findIds, findThread, plan, readMessage, rewriteHandler } from "./rewrite-slack";

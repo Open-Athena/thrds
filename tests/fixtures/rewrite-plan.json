@@ -1,0 +1,251 @@
+{
+  "thrds_rewrite_plan": 1,
+  "actions": [
+    {
+      "kind": "repost",
+      "channel": "C1",
+      "ts": "6.0",
+      "thread_ts": null,
+      "hash": "358c05b700903afb",
+      "old": {
+        "text": "card :old:",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "card :new:",
+        "blocks": null,
+        "sender": {
+          "username": "Digest",
+          "icon_url": null,
+          "icon_emoji": ":bar_chart:"
+        },
+        "files": []
+      },
+      "reason": null,
+      "metadata": {
+        "event_type": "fleet",
+        "event_payload": {
+          "id": 1
+        }
+      }
+    },
+    {
+      "kind": "blocked",
+      "channel": "C1",
+      "ts": "5.0",
+      "thread_ts": null,
+      "hash": "cee9d6fc53b0560a",
+      "old": {
+        "text": "a person :old:",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "another app's or a person's message"
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "4.0",
+      "thread_ts": null,
+      "hash": "e61a3c88c180763c",
+      "old": {
+        "text": "fallback :old:",
+        "blocks": [
+          {
+            "block_id": "s0",
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": ":old: build"
+            }
+          }
+        ],
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "fallback :new:",
+        "blocks": [
+          {
+            "block_id": "s0",
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": ":new: build"
+            }
+          }
+        ],
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "noop",
+      "channel": "C1",
+      "ts": "3.0",
+      "thread_ts": null,
+      "hash": "98a3e09fad28074a",
+      "old": {
+        "text": "nothing to change",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "nothing to change",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "2.0",
+      "thread_ts": null,
+      "hash": "8a41a583c9c79a19",
+      "old": {
+        "text": ":old: two",
+        "blocks": [
+          {
+            "type": "rich_text",
+            "block_id": "r1",
+            "elements": [
+              {
+                "type": "rich_text_section",
+                "elements": [
+                  {
+                    "type": "emoji",
+                    "name": "old"
+                  }
+                ]
+              }
+            ]
+          }
+        ],
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": ":new: two",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "2.1",
+      "thread_ts": "2.0",
+      "hash": "87278b95b607f875",
+      "old": {
+        "text": ":old: reply",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": ":new: reply",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "blocked",
+      "channel": "C1",
+      "ts": "2.2",
+      "thread_ts": "2.0",
+      "hash": "213e2102cc97aa38",
+      "old": {
+        "text": "a person's reply :old:",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "another app's or a person's message"
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "1.0",
+      "thread_ts": null,
+      "hash": "0a77033fc6beb242",
+      "old": {
+        "text": ":old: one 🚀",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": ":new: one 🚀",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    }
+  ]
+}

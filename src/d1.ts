@@ -5,6 +5,7 @@
  * Create the tables with `SCHEMA` (or `slotsSchema(table)` / `avatarsSchema(table)`) in a migration.
  */
 import { unbase64, base64, type AvatarStore } from "./avatar";
+import type { RewriteOutcome, RewriteReceipts } from "./rewrite";
 import type { SlotState, SlotStore } from "./slots";
 
 export interface D1Statement {
@@ -42,7 +43,20 @@ export const avatarsSchema = (table = "public_avatars"): string =>
   created_at INTEGER NOT NULL
 );`;
 
-export const SCHEMA = `${slotsSchema()}\n${avatarsSchema()}\n`;
+/** Bulk-rewrite receipts (`d1Receipts`): every outcome of a real apply, per plan. */
+export const rewriteReceiptsSchema = (table = "thrds_rewrite_receipts"): string =>
+  `CREATE TABLE IF NOT EXISTS ${ident(table)} (
+  plan TEXT NOT NULL,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  status TEXT NOT NULL,
+  new_ts TEXT,
+  error TEXT,
+  at INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS ${ident(table)}_plan ON ${ident(table)} (plan, status);`;
+
+export const SCHEMA = `${slotsSchema()}\n${avatarsSchema()}\n${rewriteReceiptsSchema()}\n`;
 
 const EMPTY: SlotState = { slots: {} };
 const nowS = (): number => Math.floor(Date.now() / 1000);
@@ -142,4 +156,29 @@ export function sqliteD1(db: SqliteLike): D1Like {
     },
   });
   return { prepare: (sql) => stmt(sql) };
+}
+
+/**
+ * A bulk rewrite's receipts in D1, keyed by `plan` (any id naming the plan: its storage key, or a hash of it): each
+ * real outcome is a row, and `done()` is the ts already `done` / `already`, so a re-run (or the next batch's request)
+ * skips them.
+ */
+export function d1Receipts(db: D1Like, plan: string, options: { table?: string; now?: () => number } = {}): RewriteReceipts {
+  const t = ident(options.table ?? "thrds_rewrite_receipts");
+  const now = options.now ?? nowS;
+  return {
+    async done() {
+      const row = await db
+        .prepare(`SELECT group_concat(ts, ' ') AS tss FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`)
+        .bind(plan)
+        .first<{ tss: string | null }>();
+      return new Set(row?.tss ? row.tss.split(" ") : []);
+    },
+    async record(o: RewriteOutcome) {
+      await db
+        .prepare(`INSERT INTO ${t} (plan, ts, kind, status, new_ts, error, at) VALUES (?, ?, ?, ?, ?, ?, ?)`)
+        .bind(plan, o.ts, o.kind, o.status, o.new_ts ?? null, o.error ?? null, now())
+        .run();
+    },
+  };
 }

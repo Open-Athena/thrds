@@ -310,18 +310,51 @@ const serve = derivedAvatarHandler({ resolveFace: async (id) => (await slack.use
 - **Badges:** `BADGES` has presets (`automated`, `succeeded`, `failed`, `running`, …). A badge can also be `{ color, glyph }` or `{ color, image }`.
 - **Fallback faces:** `identiconPng(await identiconSeed(secret, email))` and `serviceIconPng()` are deterministic PNGs for people without a photo and for jobs. Pass `memoKey` so a byte face renders once.
 
-## Reviewing a bulk rewrite: `PlanView`
+## Bulk rewrite
 
-A bulk rewrite brings an app's existing messages up to date after their look changes. The Python side finds the messages, renders them and applies the result (`slck rewrite plan / show / apply`; `thrds.rewrite` on the `py` branch). The plan it writes is JSON, one action per message: `edit`, `repost`, `noop`, `skip` or `blocked`. `parsePlan` and the `RewritePlan` types read that JSON. `PlanView` (`@open-athena/thrds/plan-view`, with React ≥ 18 as an optional peer) is the review UI:
+A bulk rewrite brings an app's existing messages up to date after their look changes: find them, re-render each, review the plan, apply it. TS and Python (`thrds.rewrite` on the `py` branch, `slck rewrite plan / show / apply / review`) write the same plan JSON and the same content hashes, so a plan either one writes, the other applies.
+
+```ts
+import { apply, findHistory, memoryReceipts, plan } from "@open-athena/thrds";
+
+const found = await findHistory(client, { oldest: "1761955200", includeReplies: true });
+const p = await plan(found, (f) => (isDigest(f) ? { text: renderDigest(f) } : { skip: "not a digest" }));
+await apply(p, client);                                       // dry run: pending / stale / gone / already
+await apply(p, client, { dryRun: false, receipts: memoryReceipts() });
+```
+
+- **Find:** `findHistory` (newest first; `oldest` / `latest`, `includeReplies`), `findThread`, `findIds`. Only this token's own posts, unless `includeForeign` (they plan as `blocked`).
+- **Plan:** `render(found)` returns `{ text, blocks?, sender? }` or `{ skip: reason }`; `substitute({ ":old:": ":new:" })` is a ready-made one. Each message gets one action: `edit`, `repost` (a sender change, which `chat.update` can't make: a post, then a delete), `noop`, `skip` or `blocked` (a repost that would orphan replies, move the message, or drop its files; someone else's message; text over 4,000 chars).
+- **Apply:** each action re-reads its message and refuses it once its content hash moved (`stale`). Writes are 1.2 s apart. A repost posts before it deletes, so a failure leaves a duplicate (`undeleted`), never a loss. `receipts` (`memoryReceipts`, or `d1Receipts(db, planId)` from `/d1`, table `rewriteReceiptsSchema()`) make a re-run skip what's done.
+
+### Hosting the review: `rewriteHandler` + `PlanView`
+
+`PlanView` (`@open-athena/thrds/plan-view`, React ≥ 18 as an optional peer) is the review UI; it never writes to Slack itself. In an app, serve it behind the app's own auth, with `rewriteHandler` as its backend in a Worker / Pages Function:
+
+```ts
+// functions/api/rewrite/[op].ts (after the app's admin check)
+import { rewriteHandler, SlackClient, verifyPlan } from "@open-athena/thrds";
+import { d1Receipts } from "@open-athena/thrds/d1";
+
+export const onRequest = async ({ request, env }) =>
+  rewriteHandler(request, {
+    plan: async () => verifyPlan(JSON.parse(await env.PLANS.get(planId))),  // Python- or TS-written
+    client: () => new SlackClient({ token: env.SLACK_BOT_TOKEN }),
+    receipts: d1Receipts(env.DB, planId),
+  });
+```
+
+`GET …/plan` returns `{path, plan}`; `POST …/check` and `…/apply` take `{ids}` and return `{outcomes}` (a dry run for `check`). A POST must be JSON and same-origin, and the ids must be the plan's edits or reposts, at most 10 per request (`maxBatch`): each is a few Slack calls, under a Worker request's subrequest cap. The page's side, `postRewrite`, sends a selection in batches of 10 and reports each batch's outcomes as they land:
 
 ```tsx
+import { postRewrite } from "@open-athena/thrds";
 import { PlanView } from "@open-athena/thrds/plan-view";
 
 <PlanView
-  plan={plan}                       // `slck rewrite show -j plan.json`, or your backend's `Plan.review_json()`
-  outcomes={outcomes}               // by ts, from your last check / apply
-  onCheck={(sel) => api.check(sel)} // dry run on your backend
-  onApply={(sel) => api.apply(sel)} // your backend runs `apply(plan, client, dry_run=False, only=…)`
+  plan={plan}                        // from `GET /api/rewrite/plan`
+  outcomes={outcomes}                // by ts
+  onCheck={(sel) => postRewrite("/api/rewrite/check", sel.map((a) => a.ts), { onOutcomes: record })}
+  onApply={(sel) => postRewrite("/api/rewrite/apply", sel.map((a) => a.ts), { onOutcomes: record })}
   renderContent={(c, side, a) => (isFleetCard(a) ? <FleetCard content={c} /> : undefined)}
   emoji={{ party: "https://…/party.png" }}
 />
@@ -329,7 +362,7 @@ import { PlanView } from "@open-athena/thrds/plan-view";
 
 - **Filters:** by kind (all but `noop` at first) and by text or ts.
 - **Each row:** the message before and after, rendered as Slack would, or by `renderContent` when it returns something; a text diff; the sender change; and the outcome.
-- **Selection:** edits and reposts are selectable. `Apply` asks for confirmation inside the view before calling `onApply`. The view never writes to Slack itself, so it can sit behind an app's own auth.
+- **Selection:** edits and reposts are selectable. `Apply` asks for confirmation inside the view before calling `onApply`.
 - **Styling:** `PLAN_VIEW_CSS`, `tpv-` classes, light and dark. Pass `unstyled` to style the classes yourself.
 
 `slck rewrite review plan.json` serves the same view standalone on localhost. Its bundle is built here with `pnpm build:review` into `dist/review/`, and the Python package vendors it.

@@ -94,6 +94,8 @@ export interface FakeMessage {
   metadata?: { event_type: string; event_payload: Record<string, unknown> };
   /** Attached files, as Slack lists them on a message (here just `id` and `name`). */
   files?: Array<{ id: string; name: string }>;
+  /** A `bot_message`'s icon override: `{ emoji }`, or `{ image_48 }` for an `icon_url`. */
+  icons?: Record<string, string>;
 }
 
 /** An uploaded file in a `fakeChannel`. */
@@ -131,6 +133,11 @@ export function fakeChannel(
   let f = 100;
   const writes: Array<[string, string]> = [];
   const err = (error: string): Reply => ({ body: { ok: false, error } });
+  // Like Slack, a thread's parent reads with its `reply_count`.
+  const withReplyCount = (m: FakeMessage): FakeMessage & { reply_count?: number } => {
+    const replies = messages.filter((x) => x.thread_ts === m.ts && x.ts !== m.ts).length;
+    return replies > 0 && !(m.thread_ts && m.thread_ts !== m.ts) ? { ...m, reply_count: replies } : m;
+  };
   const routes: Record<string, Route> = {
     "auth.test": AUTH,
     "chat.postMessage": ({ body }) => {
@@ -140,6 +147,9 @@ export function fakeChannel(
       if (body["thread_ts"]) m.thread_ts = body["thread_ts"] as string;
       if (body["username"]) m.username = body["username"] as string;
       if (body["username"] || body["icon_url"] || body["icon_emoji"]) m.subtype = "bot_message";
+      if (body["icon_emoji"]) m.icons = { emoji: body["icon_emoji"] as string };
+      else if (body["icon_url"]) m.icons = { image_48: body["icon_url"] as string };
+      if (body["thread_ts"] && body["reply_broadcast"]) m.subtype = "thread_broadcast";
       if (body["blocks"]) m.blocks = body["blocks"] as unknown[];
       if (body["metadata"]) m.metadata = body["metadata"] as FakeMessage["metadata"];
       messages.push(m);
@@ -180,7 +190,8 @@ export function fakeChannel(
       const ts = body["ts"] as string;
       const parent = messages.find((x) => x.ts === ts);
       if (!parent) return err("thread_not_found");
-      return { body: { ok: true, messages: [parent, ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)] } };
+      const thread = [withReplyCount(parent), ...messages.filter((x) => x.thread_ts === ts && x.ts !== ts)];
+      return { body: { ok: true, messages: body["limit"] === undefined ? thread : thread.slice(0, Number(body["limit"])) } };
     },
     "files.getUploadURLExternal": ({ body }) => {
       const id = `F${++f}`;
@@ -235,8 +246,12 @@ export function fakeChannel(
     },
     "conversations.history": ({ body }) => {
       const oldest = Number(body["oldest"] ?? 0);
-      const top = messages.filter((x) => !x.thread_ts && Number(x.ts) >= oldest).reverse();
-      return { body: { ok: true, messages: top } };
+      const latest = body["latest"] === undefined ? Infinity : Number(body["latest"]);
+      const top = messages
+        .filter((x) => (!x.thread_ts || x.thread_ts === x.ts || x.subtype === "thread_broadcast") && Number(x.ts) >= oldest && Number(x.ts) < latest)
+        .reverse()
+        .map(withReplyCount);
+      return { body: { ok: true, messages: body["limit"] === undefined ? top : top.slice(0, Number(body["limit"])) } };
     },
   };
   const intercepted: Record<string, Route> = {};

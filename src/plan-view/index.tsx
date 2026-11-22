@@ -3,8 +3,9 @@
  *
  * Lists the plan's actions with kind filters and a text filter. Each action shows the message before and after,
  * rendered as Slack would (or by the app's `renderContent`), or as a text diff. The edits and reposts you select go to
- * `onApply` (and `onCheck`, a dry run). The app's backend runs the apply (Python `thrds.rewrite.apply`), so the view
- * works behind the app's own auth. Outcomes passed back show on each row.
+ * `onApply` (and `onCheck`, a dry run). The app's backend runs the apply (`rewriteHandler` in a Worker, or Python
+ * `thrds.rewrite.apply`), so the view works behind the app's own auth; `postRewrite` posts a selection to it in
+ * batches. Outcomes passed back show on each row.
  */
 import { useMemo, useState, type ReactNode } from "react";
 import {

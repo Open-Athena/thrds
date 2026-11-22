@@ -1,27 +1,16 @@
 /**
  * The standalone review page `slck rewrite review PLAN` serves: `PlanView` over the server's `/plan`, with `Check`
- * and `Apply` posting the selected ts to `/check` and `/apply`. Bundled with React into `dist/review/` (`pnpm
- * build:review`) and vendored into the Python package.
+ * and `Apply` posting the selected ts to `/check` and `/apply` (`postRewrite`, in batches). Bundled with React into
+ * `dist/review/` (`pnpm build:review`) and vendored into the Python package.
  */
 import { StrictMode, useEffect, useState, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
-import { parsePlan, type PlannedAction, type RewriteOutcome, type RewritePlan } from "../rewrite.js";
+import { parsePlan, postRewrite, type PlannedAction, type RewriteOutcome, type RewritePlan } from "../rewrite.js";
 import { PLAN_VIEW_CSS, PlanView } from "./index.js";
 
 interface Loaded {
   path: string;
   plan: RewritePlan;
-}
-
-async function post(endpoint: string, actions: PlannedAction[]): Promise<RewriteOutcome[]> {
-  const res = await fetch(endpoint, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ ids: actions.map((a) => a.ts) }),
-  });
-  const body = (await res.json()) as { outcomes?: RewriteOutcome[]; error?: string };
-  if (!res.ok || body.outcomes === undefined) throw new Error(body.error ?? `${endpoint}: HTTP ${res.status}`);
-  return body.outcomes;
 }
 
 function App(): ReactNode {
@@ -40,6 +29,10 @@ function App(): ReactNode {
   }, []);
 
   const record = (os: RewriteOutcome[]) => setOutcomes((prev) => ({ ...prev, ...Object.fromEntries(os.map((o) => [o.ts, o])) }));
+  // In batches, each batch's outcomes shown as it lands.
+  const send = async (op: "check" | "apply", sel: PlannedAction[]) => {
+    await postRewrite(`/${op}`, sel.map((a) => a.ts), { onOutcomes: record });
+  };
 
   return (
     <div className="tpv tpv-page">
@@ -57,8 +50,8 @@ function App(): ReactNode {
             unstyled
             plan={loaded.plan}
         outcomes={outcomes}
-            onCheck={async (sel) => record(await post("/check", sel))}
-            onApply={async (sel) => record(await post("/apply", sel))}
+            onCheck={(sel) => send("check", sel)}
+            onApply={(sel) => send("apply", sel)}
           />
         </>
       )}

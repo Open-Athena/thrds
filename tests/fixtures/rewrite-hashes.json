@@ -1,0 +1,126 @@
+[
+  {
+    "content": {
+      "text": "plain",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "hash": "afb7900d82f46ff9"
+  },
+  {
+    "content": {
+      "text": "",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "hash": "1f30a11c0dbce7a9"
+  },
+  {
+    "content": {
+      "text": "quotes \" and \\ backslash, tab\t, newline\n, nul \u0000, bell \u0007, del ",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "hash": "1b23489df77a775b"
+  },
+  {
+    "content": {
+      "text": "unicode: é ü 日本語 🚀     😀",
+      "blocks": null,
+      "sender": {
+        "username": "Digest",
+        "icon_url": null,
+        "icon_emoji": ":bar_chart:"
+      },
+      "files": []
+    },
+    "hash": "85d487fc1d663ab8"
+  },
+  {
+    "content": {
+      "text": "blocks",
+      "blocks": [
+        {
+          "type": "section",
+          "block_id": "b1",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*x* ✓",
+            "verbatim": false
+          },
+          "fields": [
+            {
+              "type": "plain_text",
+              "text": "1",
+              "emoji": true
+            }
+          ]
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "hash": "ec52692a5b2dcb59"
+  },
+  {
+    "content": {
+      "text": "files",
+      "blocks": null,
+      "sender": {
+        "username": "U",
+        "icon_url": "https://example.com/a.png",
+        "icon_emoji": null
+      },
+      "files": [
+        "F1",
+        "F2"
+      ]
+    },
+    "hash": "ddddb5fb45b0fdaf"
+  },
+  {
+    "content": {
+      "text": "nested",
+      "blocks": [
+        {
+          "z": 1,
+          "a": [
+            2,
+            -3,
+            1234567890123
+          ],
+          "m": {
+            "b": null,
+            "a": true
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "hash": "0fa9cbf63071edcc"
+  }
+]
