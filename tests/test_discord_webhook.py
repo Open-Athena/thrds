@@ -3,7 +3,7 @@
 A webhook sets `username`/`avatar_url` per message (the bot API can't) but can't
 open a thread or read messages, so this client is write-only (post/edit/delete)
 and pairs with a `DiscordClient` for threading + reconcile. See
-specs/discord-push.md.
+specs/done/discord-push.md.
 
 The stub records each `_curl_raw` call as `(method, url, data, label)` so tests
 assert exact request shapes; POSTs return a canned id. The fake `webhook_url`

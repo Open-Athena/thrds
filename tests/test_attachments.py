@@ -2,7 +2,7 @@
 
 `Msg(content, images=[Image(...)])` carries attachments through `core.sync` to
 POST and (when an edit fires) EDIT. A hosted `url` is the cross-platform
-currency; Discord's webhook and (since `specs/slack-lazy-image-upload.md`) Slack
+currency; Discord's webhook and (since `specs/done/slack-lazy-image-upload.md`) Slack
 both upload local bytes. Only the Discord *bot* API and Bluesky can't, so they
 raise on non-empty `images`. See `specs/unified-image-attachments.md`.
 """

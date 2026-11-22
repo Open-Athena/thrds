@@ -1,6 +1,6 @@
 """Tests for the `thrds discord …` subgroup.
 
-Two delivery models (see specs/done/discord-platform.md, specs/discord-push.md):
+Two delivery models (see specs/done/discord-platform.md, specs/done/discord-push.md):
 paste (init + render + lint + open — post *as you*, since self-bots violate
 ToS) and bot push (push + thread — post *as a bot*: OP in the channel, replies
 in a thread). Push tests stub `DiscordClient._curl` so `sync` runs for real

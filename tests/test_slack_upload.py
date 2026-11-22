@@ -1,4 +1,4 @@
-"""Lazy image upload on Slack (`Image(path=…)`), `specs/slack-lazy-image-upload.md`.
+"""Lazy image upload on Slack (`Image(path=…)`), `specs/done/slack-lazy-image-upload.md`.
 
 A local-`path` image hashes its bytes, uploads via the three-step external flow,
 and lands as a `slack_file` image block whose `alt_text` carries the sha — so

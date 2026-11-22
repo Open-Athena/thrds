@@ -4,7 +4,7 @@ The composite routes each `core.sync` op: listing/threading via the bot, a
 per-sender reply via the webhook, an edit/delete back to whichever transport
 authored the target. Both transports' HTTP is stubbed (`DiscordClient._curl`
 and `DiscordWebhookClient._curl_raw`) onto shared recorders, so each test
-asserts the exact bot-vs-webhook call split. See specs/discord-push.md.
+asserts the exact bot-vs-webhook call split. See specs/done/discord-push.md.
 """
 from __future__ import annotations
 
