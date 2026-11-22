@@ -390,7 +390,7 @@ Each `Action` carries `prior_content` (for EDIT/DELETE) alongside `content`, ena
 
 ### Bulk rewrite (Slack)
 
-Brings an app's existing messages up to date after it changes how its posts look (an emoji vocabulary, a label, a layout). You review the changes first. It works on messages thrds didn't post itself, chosen by the app (`thrds.rewrite`, `specs/bulk-rewrite.md`):
+Brings an app's existing messages up to date after it changes how its posts look (an emoji vocabulary, a label, a layout). You review the changes first. It works on messages thrds didn't post itself, chosen by the app (`thrds.rewrite`, `specs/done/bulk-rewrite.md`):
 
 ```python
 from thrds.rewrite import Desired, Skip, apply, find_history, plan, substitute
@@ -412,7 +412,7 @@ report = apply(p, slack, dry_run=False, receipts="plan.receipts.jsonl")
    - `blocked`, for another author's message, a sender change on a message with replies or one that isn't last in its channel or thread (`reorder_ok` allows the move), or files under a new sender override.
 4. **Apply:** re-reads each message first. If its content no longer matches the planned hash, the action is `stale` and nothing is written. If it already shows the new content, it's `already`. Writes are paced, 1.2 s apart by default. A repost posts the new message before deleting the old one, keeping the old message's metadata and files. With `receipts`, a re-run skips what's done.
 
-CLI: `slck rewrite plan -c CHANNEL [-t TS | -i TS… | -a/-b bounds -w] (-s OLD=NEW… | -r MODULE:FN) -o plan.json`, then `slck rewrite show plan.json [-k edit] [-j]` (`-j` adds per-action diffs, for a review UI), then `slck rewrite apply plan.json [-y]`. Without `-y`, `apply` is a dry run.
+CLI: `slck rewrite plan -c CHANNEL [-t TS | -i TS… | -a/-b bounds -w] (-s OLD=NEW… | -r MODULE:FN) -o plan.json`, then `slck rewrite show plan.json [-k edit] [-j]` (`-j` adds per-action diffs, for a review UI), then `slck rewrite apply plan.json [-y]`. Without `-y`, `apply` is a dry run. `slck rewrite review plan.json` serves a review page on localhost. It has filters, each message before and after rendered as Slack would, text diffs, and selection, plus Check and Apply buttons. The page is the TS package's `PlanView` (`@open-athena/thrds/plan-view`), which apps can embed behind their own auth.
 
 ### Features
 

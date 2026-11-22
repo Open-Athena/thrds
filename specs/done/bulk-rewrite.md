@@ -41,4 +41,17 @@ The app's data and its `render`. Which messages an app may touch beyond "its own
 - **Apply**: `apply(plan, client, dry_run=True, only=, receipts=, pace=1.2, jitter=, on_outcome=)`. Per action: re-read the message (`conversations.replies` by ts), then `gone` / `already` (it shows the new content) / `stale` (hash moved; for a repost also: it gained replies, or it's no longer last) / `pending` (dry run) / `done` / `failed` (Slack's error code) / `undeleted` (repost posted but the delete failed). A repost posts first, then deletes: a failure leaves a duplicate, never a loss. It carries the old message's `metadata`, `reply_broadcast` for a broadcast reply, and re-attaches files by `chat.update` `file_ids` (only possible without an override). A sender override on a user token fails (Slack would drop it). Receipts are JSONL, appended per outcome on a real run; a re-run skips `done` / `already`.
 - **CLI**: `plan -c CHANNEL [-t TS | -i TS… | -a OLDEST -b LATEST -w] [-f] [-m] (-s OLD=NEW… | -r MODULE:FN | -r FILE.py:FN) [-o plan.json]`; `show PLAN [-k KIND…] [-j]`; `apply PLAN [-y] [-i TS…] [-p PACE] [-r RECEIPTS]` (receipts default `PLAN.receipts.jsonl`; exits 1 on `failed` / `undeleted`). The plan's actions must be in one channel.
 
-Still to do: the review UI (preview-server plan view, and the embeddable `PlanView`), Discord, streaming for very large plans.
+## Phase 2, implemented: the review UI
+
+Decided (Ryan): one source, in React on the `ts` branch, vendored here.
+
+- **`ts`** (`1752583`, `200dd56`): `src/rewrite.ts` types the plan JSON (`RewritePlan`, `PlannedAction`, `RewriteContent`, `RewriteOutcome`, …) with `parsePlan`, `planCounts`, `writes`, `senderChanged`, `describeSender` and an LCS `lineDiff`, exported from the root. `@open-athena/thrds/plan-view` exports `PlanView`, with React ≥ 18 as an optional peer that's kept external:
+  - kind chips (all but `noop` at first) and a text / ts filter;
+  - per row: the message before and after, rendered as Slack would (`SlackMessage`: mrkdwn and Block Kit as React elements, no raw HTML), or by the app's `renderContent(content, side, action)` when it returns something; a Rendered / Diff toggle; the sender change; the outcome;
+  - selection of edits and reposts, `onCheck` (dry run) and `onApply`, with an in-view confirmation. The view never writes itself, so it can sit behind an app's auth;
+  - `emoji` map (custom emoji URLs), `messageHref`, `PLAN_VIEW_CSS` (`tpv-` classes, light and dark), `unstyled`.
+
+  DOM typing lives in `tsconfig.plan-view.json`, so the main tsconfig keeps Node's `fetch` types. `pnpm build:review` bundles the standalone page (`src/plan-view/review.tsx` + `review.html`, React included) into `dist/review/`, outside `build`, so npm consumers don't get it.
+- **`py`**: `thrds/rewrite_review/` vendors that bundle (`dist/`, `BUNDLE_PROVENANCE`) and serves it: `GET /plan` (the review form), and `POST /check` / `POST /apply` (`{"ids": [...]}` → `{"outcomes": [...]}`). Those take only the plan's edit / repost ts, require `Content-Type: application/json` and a same-origin `Origin`, and bind 127.0.0.1. `slck rewrite review PLAN [-p PORT] [-r RECEIPTS] [-O]` (default port 3078) creates the Slack client on the first check or apply, using the same receipts as `apply`. Tests: `tests/test_rewrite_review.py`. Checked in Chrome against a fake channel: render, diff, check, select, confirm, apply, and phone width.
+
+Still open: Discord, streaming for very large plans, and TS parity for find / plan / apply (only the plan types are in TS today; disky's digest uses Python).

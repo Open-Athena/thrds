@@ -1,4 +1,4 @@
-"""Bulk rewrite: find → plan → apply over an app's existing Slack messages (`specs/bulk-rewrite.md`)."""
+"""Bulk rewrite: find → plan → apply over an app's existing Slack messages (`specs/done/bulk-rewrite.md`)."""
 from __future__ import annotations
 
 import json

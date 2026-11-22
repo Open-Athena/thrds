@@ -1,6 +1,6 @@
 """`thrds slack rewrite {plan,show,apply}`: bulk rewrite of an app's existing messages.
 
-Library and design: `thrds/rewrite.py`, `specs/bulk-rewrite.md`.
+Library and design: `thrds/rewrite.py`, `specs/done/bulk-rewrite.md`.
 """
 from __future__ import annotations
 
@@ -73,7 +73,7 @@ def rewrite_cli():
 
     `plan` writes a JSON plan (one action per message: edit / repost / noop /
     skip / blocked), `show` previews one, `apply` carries it out (a dry run
-    unless `-y`). See `specs/bulk-rewrite.md`.
+    unless `-y`). See `specs/done/bulk-rewrite.md`.
     """
 
 
@@ -176,3 +176,49 @@ def rewrite_apply(ids: tuple[str, ...], pace: float, receipts: Path | None, yes:
     failed = {"failed", "undeleted"} & set(report.counts())
     if failed:
         raise click.exceptions.Exit(1)
+
+
+@rewrite_cli.command("review")
+@click.option("-O", "--no-open", is_flag=True, help="Don't open the page in a browser.")
+@click.option("-p", "--port", type=int, default=None, help="Port (default 3078; 0: any free port).")
+@click.option("-r", "--receipts", type=click.Path(dir_okay=False, path_type=Path), help="Receipts file (JSONL; default: PLAN with `.receipts.jsonl`).")
+@click.argument("plan_path", type=click.Path(exists=True, dir_okay=False, path_type=Path))
+def rewrite_review(no_open: bool, port: int | None, receipts: Path | None, plan_path: Path):
+    """Serve the review page for a plan on localhost: filter, compare, select, check, and apply.
+
+    `Check` dry-runs the selected actions; `Apply` writes them (asking first),
+    with the same hash checks and receipts as `apply -y`.
+    """
+    import webbrowser
+
+    from .rewrite_review import DEFAULT_PORT, serve
+
+    p = Plan.load(plan_path)
+    channels = sorted({a.channel for a in p.actions if a.writes})
+    if len(channels) > 1:
+        raise click.UsageError(f"plan spans channels {', '.join(channels)}; one per plan")
+    receipts = receipts or plan_path.with_suffix(".receipts.jsonl")
+    clients: list = []
+
+    def run(plan_: Plan, ids: list[str], dry_run: bool):
+        if not clients:
+            clients.append(_client(channels[0]))
+        report = apply(plan_, clients[0], dry_run=dry_run, only=ids, receipts=receipts)
+        for o in report.outcomes:
+            err(f"{'check' if dry_run else 'apply'}: {o.status.value:9} {o.kind.value:6} {o.ts}" + (f": {o.error}" if o.error else ""))
+        return report.outcomes
+
+    try:
+        server = serve(plan_path, DEFAULT_PORT if port is None else port, run)
+    except OSError as e:
+        raise click.UsageError(f"can't listen on port {DEFAULT_PORT if port is None else port} ({e.strerror}); pass -p") from e
+    url = f"http://127.0.0.1:{server.server_address[1]}/"
+    err(f"Reviewing {plan_path} at {url} (Ctrl-C to stop)")
+    if not no_open:
+        webbrowser.open(url)
+    try:
+        server.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        server.server_close()

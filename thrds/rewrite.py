@@ -1,6 +1,6 @@
 """Bulk rewrite: find an app's Slack messages, re-render them, review the plan, apply it.
 
-Three steps, the middle one pure (`specs/bulk-rewrite.md`):
+Three steps, the middle one pure (`specs/done/bulk-rewrite.md`):
 
 1. **Find** (`find_history` / `find_thread` / `find_ids`): the messages in
    scope, as `Found` (wire text, blocks, sender, files, thread position).
