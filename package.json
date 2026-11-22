@@ -1,6 +1,6 @@
 {
   "name": "@open-athena/thrds",
-  "version": "0.2.0-dist.3ed46ee",
+  "version": "0.2.0-dist.1752583",
   "description": "Slack toolkit + declarative thread sync: transport, rich messages, slotted threads over pluggable stores (D1/KV), a request receiver, and badged sender avatars",
   "license": "MIT",
   "author": "Ryan Williams",
@@ -48,6 +48,11 @@
       "import": "./kv.js",
       "default": "./kv.js"
     },
+    "./plan-view": {
+      "types": "./plan-view.d.ts",
+      "import": "./plan-view.js",
+      "default": "./plan-view.js"
+    },
     "./receiver": {
       "types": "./receiver.d.ts",
       "import": "./receiver.js",
@@ -63,5 +68,8 @@
   "engines": {
     "node": ">=18"
   },
-  "packageManager": "pnpm@9.0.0"
+  "packageManager": "pnpm@9.0.0",
+  "peerDependencies": {
+    "react": ">=18"
+  }
 }
