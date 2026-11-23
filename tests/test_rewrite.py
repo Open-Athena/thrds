@@ -20,11 +20,26 @@ from thrds.rewrite import (
     find_ids,
     find_thread,
     plan,
+    same_content,
     substitute,
 )
 from thrds.slack import SlackApiError, SlackClient
 
 US, BOT = "UBOT", "BBOT"
+
+
+def slack_stored(v):
+    """``v`` as Slack stores what an app sent: ``&`` as ``&amp;``, and mrkdwn text objects with ``verbatim: false``."""
+    if isinstance(v, str):
+        return v.replace("&", "&amp;")
+    if isinstance(v, list):
+        return [slack_stored(x) for x in v]
+    if isinstance(v, dict):
+        out = {k: slack_stored(x) for k, x in v.items()}
+        if v.get("type") == "mrkdwn":
+            out.setdefault("verbatim", False)
+        return out
+    return v
 
 
 class FakeChannel(SlackClient):
@@ -91,10 +106,10 @@ class FakeChannel(SlackClient):
         self.writes.append((endpoint, data))
         if endpoint == "chat.update":
             m = self.msgs[data["ts"]]
-            m["text"] = data["text"]
+            m["text"] = slack_stored(data["text"])
             if "blocks" in data:
                 if data["blocks"]:
-                    m["blocks"] = [{"block_id": f"b{i}", **b} for i, b in enumerate(data["blocks"])]
+                    m["blocks"] = [{"block_id": f"b{i}", **slack_stored(b)} for i, b in enumerate(data["blocks"])]
                 else:
                     m.pop("blocks", None)
             if "file_ids" in data:
@@ -206,6 +221,73 @@ def test_substitute_plans_edits_noops_and_blocks_others(ch):
     )
     assert by_ts["2.0"].new == Content(text=":new: two", blocks=None)
     assert p.counts() == {"edit": 4, "repost": 0, "noop": 1, "skip": 0, "blocked": 2}
+
+
+# r2's November digest OP (2026-11-23), trimmed: Slack stored the text one line with `&amp;`, the section with
+# `&amp;` and `verbatim: false`, and the image with the fields it measured. The digest renders the same message
+# with `&`, newlines, and none of Slack's fields.
+R2_LINK = "<https://openathena.slack.com/archives/C0C9J6CE8BD/p1792161450872609?thread_ts=1792161450.872609&cid=C0C9J6CE8BD|← October>"
+R2_IMAGE = "https://78c8fa4d.oa-r2-usage-icons.pages.dev/plot-44e86ce2c3df3d0ceff5b79f6bc8b9e0.png?v=1795394377"
+R2_WANT_TEXT = f"*−1.1 TB* <https://r2.oa.dev/|dashboard>\n_as of 11/22 23:22Z_\n\n_Weekly summaries_\n{R2_LINK}"
+R2_WANT_BLOCKS = [
+    {"type": "section", "text": {"type": "mrkdwn", "text": R2_WANT_TEXT}},
+    {"type": "image", "image_url": R2_IMAGE, "alt_text": "Open Athena R2 — November 2026"},
+]
+R2_LIVE = {
+    "text": R2_WANT_TEXT.replace("\n", " ").replace("&", "&amp;"),
+    "blocks": [
+        {"type": "section", "block_id": "/rQqq", "text": {"type": "mrkdwn", "text": R2_WANT_TEXT.replace("&", "&amp;"), "verbatim": False}},
+        {
+            "type": "image", "block_id": "wiYSm", "image_url": R2_IMAGE, "alt_text": "Open Athena R2 — November 2026",
+            "image_width": 1350, "image_height": 1251, "image_bytes": 88415, "fallback": "1350x1251px image", "is_animated": True,
+        },
+    ],
+}
+
+
+def test_compares_content_as_slack_stores_it():
+    ch = FakeChannel()
+    ch.add("1.0", **R2_LIVE)
+    p = plan(find_ids(ch, ["1.0"]), lambda f: Desired(R2_WANT_TEXT, R2_WANT_BLOCKS))
+    assert kinds(p) == [("1.0", "noop", None)]
+    # A different image URL (another deploy's host) is a real change.
+    moved = [R2_WANT_BLOCKS[0], {**R2_WANT_BLOCKS[1], "image_url": R2_IMAGE.replace("78c8fa4d", "c5fbca09")}]
+    p = plan(find_ids(ch, ["1.0"]), lambda f: Desired(R2_WANT_TEXT, moved))
+    assert kinds(p) == [("1.0", "edit", None)]
+    # Applied, Slack stores it escaped again; a re-run sees it's already there.
+    assert [(o.ts, o.status.value) for o in apply(p, ch, dry_run=False, pace=0).outcomes] == [("1.0", "done")]
+    assert ch.msgs["1.0"]["text"] == R2_WANT_TEXT.replace("&", "&amp;")
+    assert [(o.ts, o.status.value) for o in apply(p, ch, dry_run=False, pace=0).outcomes] == [("1.0", "already")]
+
+
+# `same_content` cases; also TS parity fixtures (`scripts/rewrite_ts_fixtures.py`).
+SAME_CASES = [
+    (Content(R2_LIVE["text"], blocks=R2_LIVE["blocks"]), Content(R2_WANT_TEXT, blocks=R2_WANT_BLOCKS), True),
+    (Content("a &amp; b &lt;x&gt;"), Content("a & b <x>"), True),
+    # An entity the app sends means its character; live `&amp;lt;` shows a literal "&lt;".
+    (Content("a &lt; b"), Content("a < b"), True),
+    (Content("a &amp;lt; b"), Content("a &lt; b"), False),
+    # Without blocks the text is what renders: whitespace counts.
+    (Content("a b"), Content("a\nb"), False),
+    (Content("a &amp; b", blocks=[RICH]), Content("a & b"), True),
+    # With blocks the text is the fallback: whitespace runs don't count, words do.
+    (Content("fb  one", blocks=[SECTION]), Content("fb\n\none", blocks=[SECTION]), True),
+    (Content("fb one", blocks=[SECTION]), Content("fb two", blocks=[SECTION]), False),
+    (Content("fb", blocks=[{"type": "header", "text": {"type": "plain_text", "text": "h", "emoji": True}}]),
+     Content("fb", blocks=[{"type": "header", "text": {"type": "plain_text", "text": "h"}}]), True),
+    (Content("fb", blocks=[{"type": "header", "text": {"type": "plain_text", "text": "h", "emoji": False}}]),
+     Content("fb", blocks=[{"type": "header", "text": {"type": "plain_text", "text": "h"}}]), False),
+    (Content("fb", blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "x", "verbatim": True}}]),
+     Content("fb", blocks=[{"type": "section", "text": {"type": "mrkdwn", "text": "x"}}]), False),
+    # Image fields count on an image block, not elsewhere.
+    (Content("fb", blocks=[{"type": "section", "fallback": "x"}]), Content("fb", blocks=[{"type": "section"}]), False),
+    (Content("a", sender=DIGEST), Content("a"), False),
+]
+
+
+@pytest.mark.parametrize("live, want, same", SAME_CASES)
+def test_same_content(live, want, same):
+    assert same_content(live, want) is same
 
 
 def test_substitute_renames_emoji_elements_in_non_rich_text_blocks():

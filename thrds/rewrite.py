@@ -26,6 +26,7 @@ from __future__ import annotations
 import hashlib
 import json
 import random
+import re
 import time
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import asdict, dataclass, field
@@ -119,11 +120,48 @@ class Content:
         )
 
 
-def _strip_block_ids(blocks: list[dict] | None) -> list[dict] | None:
-    """``blocks`` without top-level ``block_id`` (Slack assigns one to each block it stores)."""
-    if blocks is None:
-        return None
-    return [{k: v for k, v in b.items() if k != "block_id"} for b in blocks]
+def _unescape(s: str) -> str:
+    """``s`` with Slack's three stored entities (``&lt;`` ``&gt;`` ``&amp;``) turned back into characters."""
+    return s.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
+
+
+# Fields Slack adds to an image block when it stores it.
+_IMAGE_ADDED = frozenset({"image_width", "image_height", "image_bytes", "fallback", "is_animated"})
+
+
+def _canon(v, top: bool = False):
+    """A block value as Slack would show it, for comparison only.
+
+    Strings are unescaped. Dropped: a top-level block's ``block_id``, the
+    fields Slack adds to an image block, a mrkdwn text's default
+    ``verbatim: false`` and a plain_text's default ``emoji: true``.
+    """
+    if isinstance(v, str):
+        return _unescape(v)
+    if isinstance(v, list):
+        return [_canon(x) for x in v]
+    if not isinstance(v, dict):
+        return v
+    t = v.get("type")
+    drop = set()
+    if top:
+        drop.add("block_id")
+        if t == "image":
+            drop |= _IMAGE_ADDED
+    if t == "mrkdwn" and v.get("verbatim") is False:
+        drop.add("verbatim")
+    if t == "plain_text" and v.get("emoji") is True:
+        drop.add("emoji")
+    return {k: _canon(x) for k, x in v.items() if k not in drop}
+
+
+def _words(s: str) -> str:
+    """``s`` unescaped, with runs of ASCII whitespace collapsed to one space and none at the ends."""
+    return " ".join(w for w in re.split(r"[ \t\n\r\f\v]+", _unescape(s)) if w)
+
+
+def _canon_blocks(blocks: list[dict] | None) -> list | None:
+    return None if blocks is None else [_canon(b, top=True) for b in blocks]
 
 
 def _only_rich_text(blocks: list[dict] | None) -> bool:
@@ -132,17 +170,24 @@ def _only_rich_text(blocks: list[dict] | None) -> bool:
 
 
 def same_content(live: Content, want: Content) -> bool:
-    """``live`` (as read) already shows ``want``.
+    """``live`` (as read) already shows ``want``: compared as Slack stores a message.
 
-    Block ids are ignored (Slack assigns them). ``want.blocks is None`` (a
-    text-only message) matches live blocks that are only ``rich_text``, which
-    Slack derives from the text.
+    - ``&amp;`` ``&lt;`` ``&gt;`` (how Slack stores ``&`` ``<`` ``>``) equal the
+      characters, in the text and in every block string.
+    - A text-only ``want`` (no blocks) matches live blocks that are only
+      ``rich_text``, which Slack derives from the text; the text must match.
+    - With blocks, the blocks are what renders and the text is only the
+      notification fallback, so the text is compared with whitespace runs
+      collapsed. Block ids, the fields Slack adds to an image block, and the
+      default ``verbatim: false`` / ``emoji: true`` are ignored.
     """
-    if live.text != want.text or live.sender != want.sender or live.files != want.files:
+    if live.sender != want.sender or live.files != want.files:
         return False
-    if want.blocks is None:
-        return _only_rich_text(live.blocks)
-    return _strip_block_ids(live.blocks) == _strip_block_ids(want.blocks)
+    if not want.blocks:
+        return _unescape(live.text) == _unescape(want.text) and _only_rich_text(live.blocks)
+    if _words(live.text) != _words(want.text):
+        return False
+    return _canon_blocks(live.blocks or []) == _canon_blocks(want.blocks)
 
 
 @dataclass(frozen=True)
@@ -311,7 +356,7 @@ class PlannedAction:
         if self.new.text != self.old.text:
             lines += [f"  {RED}-{line}{RESET}" for line in self.old.text.split("\n")]
             lines += [f"  {GREEN}+{line}{RESET}" for line in self.new.text.split("\n")]
-        if _strip_block_ids(self.new.blocks) != _strip_block_ids(self.old.blocks) and not (
+        if _canon_blocks(self.new.blocks) != _canon_blocks(self.old.blocks) and not (
             self.new.blocks is None and _only_rich_text(self.old.blocks)
         ):
             lines.append(f"  {DIM}blocks: {_blocks_summary(self.old.blocks)} → {_blocks_summary(self.new.blocks)}{RESET}")

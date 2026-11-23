@@ -3,15 +3,16 @@
     scripts/rewrite_ts_fixtures.py <ts-checkout>/tests/fixtures
 
 Run by `scripts/sync-rewrite-bundle`. `tests/rewrite-slack.test.ts` (ts) checks its `contentHash` against
-`rewrite-hashes.json`, and that planning the same fake channel gives `rewrite-plan.json`.
+`rewrite-hashes.json`, its `sameContent` against `rewrite-same.json`, and that planning the same fake channel gives
+`rewrite-plan.json`.
 """
 import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_rewrite import DIGEST, FakeChannel, RICH, SECTION  # noqa: E402
-from thrds.rewrite import Content, Desired, Sender, find_history, plan, substitute  # noqa: E402
+from tests.test_rewrite import DIGEST, FakeChannel, RICH, SAME_CASES, SECTION  # noqa: E402
+from thrds.rewrite import Content, Desired, Sender, find_history, plan, same_content, substitute  # noqa: E402
 
 out = Path(sys.argv[1])
 contents = [
@@ -24,6 +25,9 @@ contents = [
     Content("nested", blocks=[{"z": 1, "a": [2, -3, 1234567890123], "m": {"b": None, "a": True}}]),
 ]
 (out / "rewrite-hashes.json").write_text(json.dumps([{"content": c.to_json(), "hash": c.hash} for c in contents], indent=2, ensure_ascii=False) + "\n")
+
+same = [{"live": live.to_json(), "want": want.to_json(), "same": same_content(live, want)} for live, want, _ in SAME_CASES]
+(out / "rewrite-same.json").write_text(json.dumps(same, indent=2, ensure_ascii=False) + "\n")
 
 ch = FakeChannel()
 ch.add("1.0", ":old: one 🚀")

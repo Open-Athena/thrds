@@ -19,3 +19,15 @@ The one-line vs. newlines difference needs a look at the real message: for a mes
 4. A test with the r2 plan's shapes: live text with `&amp;` and a one-line fallback, desired with `&` and newlines, identical blocks → `noop`.
 
 Then a new `py` sha and `ts` dist for disky to pin (cloud `pyproject.toml`, `site/package.json`); send them to the disky root session.
+
+## Implemented
+
+py (`same_content`, `thrds/rewrite.py`) and ts (`sameContent`, `src/rewrite.ts`, dist `0.2.0-dist.6de9bd8`) compare the same way; `tests/fixtures/rewrite-same.json` (ts) is written by py's `scripts/rewrite_ts_fixtures.py` from `SAME_CASES` in `tests/test_rewrite.py`.
+
+- **Escaping:** both sides are unescaped (`&lt;` `&gt;`, then `&amp;`) in the text and in every string in the blocks. An entity the app sends means its character, so live `&amp;lt;` (a literal "&lt;") differs from a sent `&lt;`.
+- **Fallback text:** with (non-empty) desired blocks, the text is compared with runs of ASCII whitespace collapsed (ASCII only, so py and ts agree exactly); its words still count. Without blocks the text is what renders and must match exactly (after unescaping).
+- **More of Slack's storage form**, found in the r2 plan: the stored section had `verbatim: false`, and the stored image block `image_width` / `image_height` / `image_bytes` / `fallback` / `is_animated`. Ignored: top-level `block_id`, those five fields on an image block, mrkdwn `verbatim: false`, plain_text `emoji: true`.
+- **`already`** uses the same comparison, so a re-run after a real apply reports `already`. The content hash (`stale` check) is unchanged: it hashes the live message as read, on both sides, so no plan written before this is invalidated.
+- **Test:** `test_compares_content_as_slack_stores_it` (py) and "content as Slack stores it" (ts), with the r2 OP's shapes: `noop`; with a moved image URL, `edit`, then `already` after Slack stores the edit escaped. The fake channel (py) now stores `chat.update`s as Slack does (`&amp;`, `verbatim: false`).
+
+**Still an `edit` for the r2 OP:** its image URL differs between live and desired (deploy host `c5fbca09` vs. `78c8fa4d`, and `?v=`), a real change thrds can't see through. For the OP to plan as `noop`, the digest needs a stable plot URL (the production alias, and a `v` that changes only with the content; it differs between the two renders now).
