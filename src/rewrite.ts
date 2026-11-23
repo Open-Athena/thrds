@@ -204,19 +204,53 @@ export function contentOf(m: Record<string, unknown>): RewriteContent {
 export const sameSender = (a: RewriteSender, b: RewriteSender): boolean =>
   a.username === b.username && a.icon_url === b.icon_url && a.icon_emoji === b.icon_emoji;
 
-const stripBlockIds = (blocks: Block[] | null): unknown[] | null =>
-  blocks === null ? null : blocks.map((b) => Object.fromEntries(Object.entries(b).filter(([k]) => k !== "block_id")));
+/** `s` with Slack's three stored entities (`&lt;` `&gt;` `&amp;`) turned back into characters. */
+export const unescapeSlack = (s: string): string => s.replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+
+/** Fields Slack adds to an image block when it stores it. */
+const IMAGE_ADDED = new Set(["image_width", "image_height", "image_bytes", "fallback", "is_animated"]);
+
+/** A block value as Slack would show it, for comparison only: strings unescaped; dropped are a top-level block's
+ *  `block_id`, the fields Slack adds to an image block, a mrkdwn text's default `verbatim: false` and a plain_text's
+ *  default `emoji: true`. */
+function canon(v: unknown, top = false): unknown {
+  if (typeof v === "string") return unescapeSlack(v);
+  if (Array.isArray(v)) return v.map((x) => canon(x));
+  if (v === null || typeof v !== "object") return v;
+  const o = v as Record<string, unknown>;
+  const t = o["type"];
+  const drop = (k: string): boolean =>
+    (top && (k === "block_id" || (t === "image" && IMAGE_ADDED.has(k)))) ||
+    (t === "mrkdwn" && k === "verbatim" && o[k] === false) ||
+    (t === "plain_text" && k === "emoji" && o[k] === true);
+  return Object.fromEntries(Object.entries(o).filter(([k]) => !drop(k)).map(([k, x]) => [k, canon(x)]));
+}
+
+const canonBlocks = (blocks: Block[] | null): unknown[] | null => (blocks === null ? null : blocks.map((b) => canon(b, true)));
+
+/** `blocks` differ as Slack would show them (see `sameContent`). */
+const blocksDiffer = (a: Block[] | null, b: Block[] | null): boolean =>
+  pyJsonDumps(canonBlocks(a)) !== pyJsonDumps(canonBlocks(b));
 
 /** No blocks, or only `rich_text` (Slack's own rendering of the text). */
 export const onlyRichText = (blocks: Block[] | null): boolean => !blocks || blocks.every((b) => b.type === "rich_text");
 
-/** `live` (as read) already shows `want`: block ids ignored (Slack assigns them); a text-only `want` matches live
- *  blocks that are only `rich_text`. */
+const words = (s: string): string => unescapeSlack(s).split(/[ \t\n\r\f\v]+/).filter(Boolean).join(" ");
+
+/** `live` (as read) already shows `want`, compared as Slack stores a message (as Python's `same_content`):
+ *  - `&amp;` `&lt;` `&gt;` (how Slack stores `&` `<` `>`) equal the characters, in the text and every block string.
+ *  - A text-only `want` (no blocks) matches live blocks that are only `rich_text`, which Slack derives from the text;
+ *    the text must match.
+ *  - With blocks, the blocks are what renders and the text is only the notification fallback, so the text is
+ *    compared with whitespace runs collapsed. Block ids, the fields Slack adds to an image block, and the default
+ *    `verbatim: false` / `emoji: true` are ignored. */
 export function sameContent(live: RewriteContent, want: RewriteContent): boolean {
-  if (live.text !== want.text || !sameSender(live.sender, want.sender)) return false;
+  if (!sameSender(live.sender, want.sender)) return false;
   if (live.files.length !== want.files.length || live.files.some((f, i) => f !== want.files[i])) return false;
-  if (want.blocks === null) return onlyRichText(live.blocks);
-  return pyJsonDumps(stripBlockIds(live.blocks)) === pyJsonDumps(stripBlockIds(want.blocks));
+  if (!want.blocks || want.blocks.length === 0) {
+    return unescapeSlack(live.text) === unescapeSlack(want.text) && onlyRichText(live.blocks);
+  }
+  return words(live.text) === words(want.text) && !blocksDiffer(live.blocks ?? [], want.blocks);
 }
 
 // --- find ---------------------------------------------------------------

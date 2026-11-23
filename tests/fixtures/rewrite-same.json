@@ -1,0 +1,443 @@
+[
+  {
+    "live": {
+      "text": "*−1.1 TB* <https://r2.oa.dev/|dashboard> _as of 11/22 23:22Z_  _Weekly summaries_ <https://openathena.slack.com/archives/C0C9J6CE8BD/p1792161450872609?thread_ts=1792161450.872609&amp;cid=C0C9J6CE8BD|← October>",
+      "blocks": [
+        {
+          "type": "section",
+          "block_id": "/rQqq",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*−1.1 TB* <https://r2.oa.dev/|dashboard>\n_as of 11/22 23:22Z_\n\n_Weekly summaries_\n<https://openathena.slack.com/archives/C0C9J6CE8BD/p1792161450872609?thread_ts=1792161450.872609&amp;cid=C0C9J6CE8BD|← October>",
+            "verbatim": false
+          }
+        },
+        {
+          "type": "image",
+          "block_id": "wiYSm",
+          "image_url": "https://78c8fa4d.oa-r2-usage-icons.pages.dev/plot-44e86ce2c3df3d0ceff5b79f6bc8b9e0.png?v=1795394377",
+          "alt_text": "Open Athena R2 — November 2026",
+          "image_width": 1350,
+          "image_height": 1251,
+          "image_bytes": 88415,
+          "fallback": "1350x1251px image",
+          "is_animated": true
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "*−1.1 TB* <https://r2.oa.dev/|dashboard>\n_as of 11/22 23:22Z_\n\n_Weekly summaries_\n<https://openathena.slack.com/archives/C0C9J6CE8BD/p1792161450872609?thread_ts=1792161450.872609&cid=C0C9J6CE8BD|← October>",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "*−1.1 TB* <https://r2.oa.dev/|dashboard>\n_as of 11/22 23:22Z_\n\n_Weekly summaries_\n<https://openathena.slack.com/archives/C0C9J6CE8BD/p1792161450872609?thread_ts=1792161450.872609&cid=C0C9J6CE8BD|← October>"
+          }
+        },
+        {
+          "type": "image",
+          "image_url": "https://78c8fa4d.oa-r2-usage-icons.pages.dev/plot-44e86ce2c3df3d0ceff5b79f6bc8b9e0.png?v=1795394377",
+          "alt_text": "Open Athena R2 — November 2026"
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "a &amp; b &lt;x&gt;",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a & b <x>",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "a &lt; b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a < b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "a &amp;lt; b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a &lt; b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "a b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a\nb",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "a &amp; b",
+      "blocks": [
+        {
+          "type": "rich_text",
+          "block_id": "r1",
+          "elements": [
+            {
+              "type": "rich_text_section",
+              "elements": [
+                {
+                  "type": "emoji",
+                  "name": "old"
+                }
+              ]
+            }
+          ]
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a & b",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "fb  one",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": ":old: build"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb\n\none",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": ":old: build"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "fb one",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": ":old: build"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb two",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": ":old: build"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "h",
+            "emoji": true
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "h"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": true
+  },
+  {
+    "live": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "h",
+            "emoji": false
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "header",
+          "text": {
+            "type": "plain_text",
+            "text": "h"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "x",
+            "verbatim": true
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "section",
+          "text": {
+            "type": "mrkdwn",
+            "text": "x"
+          }
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "section",
+          "fallback": "x"
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "want": {
+      "text": "fb",
+      "blocks": [
+        {
+          "type": "section"
+        }
+      ],
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  },
+  {
+    "live": {
+      "text": "a",
+      "blocks": null,
+      "sender": {
+        "username": "Digest",
+        "icon_url": null,
+        "icon_emoji": ":bar_chart:"
+      },
+      "files": []
+    },
+    "want": {
+      "text": "a",
+      "blocks": null,
+      "sender": {
+        "username": null,
+        "icon_url": null,
+        "icon_emoji": null
+      },
+      "files": []
+    },
+    "same": false
+  }
+]

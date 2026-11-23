@@ -327,6 +327,8 @@ await apply(p, client, { dryRun: false, receipts: memoryReceipts() });
 - **Plan:** `render(found)` returns `{ text, blocks?, sender? }` or `{ skip: reason }`; `substitute({ ":old:": ":new:" })` is a ready-made one. Each message gets one action: `edit`, `repost` (a sender change, which `chat.update` can't make: a post, then a delete), `noop`, `skip` or `blocked` (a repost that would orphan replies, move the message, or drop its files; someone else's message; text over 4,000 chars).
 - **Apply:** each action re-reads its message and refuses it once its content hash moved (`stale`). Writes are 1.2 s apart. A repost posts before it deletes, so a failure leaves a duplicate (`undeleted`), never a loss. `receipts` (`memoryReceipts`, or `d1Receipts(db, planId)` from `/d1`, table `rewriteReceiptsSchema()`) make a re-run skip what's done.
 
+**Same content** (`noop` when planning, `already` when applying; `sameContent`) is compared as Slack stores a message. `&amp;` `&lt;` `&gt;` equal `&` `<` `>`, in the text and in every block string. With blocks, the blocks are what renders, and the text is only the notification fallback, so its runs of whitespace don't count but its words do. Without blocks the text must match. Also ignored: block ids, the size fields Slack adds to an image block, and a mrkdwn text's default `verbatim: false` or a plain_text's default `emoji: true`.
+
 ### Hosting the review: `rewriteHandler` + `PlanView`
 
 `PlanView` (`@open-athena/thrds/plan-view`, React ≥ 18 as an optional peer) is the review UI; it never writes to Slack itself. In an app, serve it behind the app's own auth, with `rewriteHandler` as its backend in a Worker / Pages Function:

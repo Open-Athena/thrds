@@ -13,6 +13,7 @@ import {
   plan,
   postRewrite,
   rewriteHandler,
+  sameContent,
   substitute,
   verifyPlan,
   type Desired,
@@ -85,6 +86,34 @@ describe("parity with Python thrds.rewrite", () => {
     const tampered = structuredClone(py) as RewritePlan;
     tampered.actions[1]!.old.text = "edited by hand";
     await expect(verifyPlan(tampered)).rejects.toThrow(/^plan action 5\.0: recorded hash \w+ doesn't match its old content \(\w+\)$/);
+  });
+
+  it("compares content as Python's `same_content` does", () => {
+    const cases = fixture("rewrite-same.json") as Array<{ live: RewriteContent; want: RewriteContent; same: boolean }>;
+    expect(cases.map((c) => sameContent(c.live, c.want))).toEqual(cases.map((c) => c.same));
+  });
+});
+
+describe("content as Slack stores it", () => {
+  // r2's November digest OP (the first `rewrite-same.json` case): Slack stored `&amp;`, a one-line fallback,
+  // `verbatim: false` and the image's measured fields; the digest renders `&`, newlines and none of those.
+  const [r2] = fixture("rewrite-same.json") as Array<{ live: RewriteContent; want: RewriteContent }>;
+  const r2Channel = () => fakeChannel({ messages: [ours("1.0", r2!.live.text, { blocks: r2!.live.blocks! })] });
+
+  it("plans a noop when only Slack's storage differs, and `already` after a real edit", async () => {
+    const { client, messages } = r2Channel();
+    const same = await plan(await findIds(client, ["1.0"]), () => ({ text: r2!.want.text, blocks: r2!.want.blocks! }));
+    expect(kinds(same)).toEqual([["1.0", "noop", null]]);
+
+    const [section, image] = r2!.want.blocks! as Array<Record<string, unknown>>;
+    const moved = [section!, { ...image!, image_url: (image!["image_url"] as string).replace("78c8fa4d", "c5fbca09") }];
+    const p = await plan(await findIds(client, ["1.0"]), () => ({ text: r2!.want.text, blocks: moved }));
+    expect(kinds(p)).toEqual([["1.0", "edit", null]]);
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["1.0", "done"]]);
+    // Slack stores the edit escaped.
+    const m = messages[0]!;
+    m.text = m.text.replaceAll("&", "&amp;");
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["1.0", "already"]]);
   });
 });
 
