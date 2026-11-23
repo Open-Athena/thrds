@@ -256,8 +256,13 @@ type RawSlackMessage = Record<string, unknown> & {
  *  carries one; an app's plain post has `icons` for its own avatar, which isn't one. */
 declare function senderOf(m: Record<string, unknown>): RewriteSender;
 declare function contentOf(m: Record<string, unknown>): RewriteContent;
-/** `live` (as read) already shows `want`: block ids ignored (Slack assigns them); a text-only `want` matches live
- *  blocks that are only `rich_text`. */
+/** `live` (as read) already shows `want`, compared as Slack stores a message (as Python's `same_content`):
+ *  - `&amp;` `&lt;` `&gt;` (how Slack stores `&` `<` `>`) equal the characters, in the text and every block string.
+ *  - A text-only `want` (no blocks) matches live blocks that are only `rich_text`, which Slack derives from the text;
+ *    the text must match.
+ *  - With blocks, the blocks are what renders and the text is only the notification fallback, so the text is
+ *    compared with whitespace runs collapsed. Block ids, the fields Slack adds to an image block, and the default
+ *    `verbatim: false` / `emoji: true` are ignored. */
 declare function sameContent(live: RewriteContent, want: RewriteContent): boolean;
 /** A message in scope, as read from Slack. `threadTs`: the parent's ts for a reply, null for a top-level message.
  *  `last`: the newest in its container (the channel's top level, or its thread); only then can a repost keep its

@@ -1,5 +1,5 @@
 import { AvatarStore } from './avatar.js';
-import { o as RewriteReceipts } from './rewrite-B4eVRuW2.js';
+import { o as RewriteReceipts } from './rewrite-CcsNOGJR.js';
 import { j as SlotStore } from './slots-CrmBIIZI.js';
 import './core-BNb_OG-w.js';
 import './slack-DsYQB40e.js';

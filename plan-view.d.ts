@@ -1,5 +1,5 @@
 import { ReactNode } from 'react';
-import { B as Block, j as RewriteContent, n as RewritePlan, m as RewriteOutcome, f as PlannedAction, l as RewriteKind } from './rewrite-B4eVRuW2.js';
+import { B as Block, j as RewriteContent, n as RewritePlan, m as RewriteOutcome, f as PlannedAction, l as RewriteKind } from './rewrite-CcsNOGJR.js';
 
 /**
  * A Slack message rendered as React elements for review: wire mrkdwn (bold, italic, strike, code, links, mentions,

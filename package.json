@@ -1,6 +1,6 @@
 {
   "name": "@open-athena/thrds",
-  "version": "0.2.0-dist.38dd767",
+  "version": "0.2.0-dist.6de9bd8",
   "description": "Slack toolkit + declarative thread sync: transport, rich messages, slotted threads over pluggable stores (D1/KV), a request receiver, and badged sender avatars",
   "license": "MIT",
   "author": "Ryan Williams",
