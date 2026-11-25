@@ -90,6 +90,27 @@ HISTORY_PAGE_SIZE = 200
 _UPLOAD_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif'}
 
 
+def section_blocks(text: str) -> list[dict]:
+    """``text`` (wire mrkdwn) as ``section`` blocks of at most `SLACK_SECTION_LIMIT` chars each: one block when it
+    fits, else split at paragraph breaks (blank lines), each block holding whole paragraphs. Slack caps a section's
+    text, not the message's, so a long body above image blocks stays one message; `_message_markdown` joins the
+    sections back with a blank line, so the split round-trips. A single paragraph over the limit raises: a split
+    inside one would read back as a paragraph break."""
+    chunks: list[str] = []
+    for para in text.split('\n\n'):
+        if len(para) > SLACK_SECTION_LIMIT:
+            raise ValueError(
+                f"Message body with image blocks has a paragraph over Slack's "
+                f"{SLACK_SECTION_LIMIT}-char section limit ({len(para)} chars); "
+                f"break it with a blank line, shorten it, or drop the image lines"
+            )
+        if chunks and len(chunks[-1]) + 2 + len(para) <= SLACK_SECTION_LIMIT:
+            chunks[-1] += '\n\n' + para
+        else:
+            chunks.append(para)
+    return [{"type": "section", "text": {"type": "mrkdwn", "text": c}} for c in chunks]
+
+
 def _image_sha(data: bytes) -> str:
     """16-hex-char content hash — the identity of an uploaded image."""
     return hashlib.sha256(data).hexdigest()[:16]
@@ -624,8 +645,9 @@ class SlackClient:
             if b.get("type") == "section" and (b.get("text") or {}).get("text")
         ]
         body: str | None = None
-        if len(sections) == 1:
-            body = _slack_to_md(split_chrome(sections[0]["text"]["text"])[0])
+        if len(sections) == 1 or (sections and not any(b.get("type") == "rich_text" for b in blocks)):
+            # One of our posts: a body over the section limit spans several (`section_blocks`, split at blank lines).
+            body = _slack_to_md(split_chrome("\n\n".join(b["text"]["text"] for b in sections))[0])
         else:
             raw = m.get("text", "")
             if rich_text_enabled():
@@ -1233,8 +1255,9 @@ class SlackClient:
         `specs/editable-image-blocks.md`. Placement interplay with staging
         chrome (`_attach_chrome` ran first):
 
-        * no chrome → ``[section(text), *images]`` (the flat ``text`` stays as
-          the notification fallback).
+        * no chrome → ``[*section_blocks(text), *images]``: one section, or
+          several split at blank lines past `SLACK_SECTION_LIMIT` (the flat
+          ``text`` stays as the notification fallback).
         * draft chrome → the footer is already folded into ``data["text"]``;
           the section carries that folded text so the chrome stays visible,
           and the flat-text fallback keeps `_live_chrome` reporting draft.
@@ -1248,12 +1271,6 @@ class SlackClient:
                 "Message is only image lines; Slack needs body text alongside "
                 "image blocks — add at least one line"
             )
-        if len(text) > SLACK_SECTION_LIMIT:
-            raise ValueError(
-                f"Message body with image blocks exceeds Slack's "
-                f"{SLACK_SECTION_LIMIT}-char section limit ({len(text)} chars); "
-                f"shorten the body or drop the image lines"
-            )
         token = bust_token()
         img_blocks = [
             slack_file_block(ref, self._upload_cached(upload_sha(ref), upload_path(ref)))
@@ -1266,10 +1283,7 @@ class SlackClient:
             tail = [b for b in existing if b.get("type") == "context"]
             data["blocks"] = [*head, *img_blocks, *tail]
         else:
-            data["blocks"] = [
-                {"type": "section", "text": {"type": "mrkdwn", "text": text}},
-                *img_blocks,
-            ]
+            data["blocks"] = [*section_blocks(text), *img_blocks]
 
     def permalink(self, message_ts: str, channel: str | None = None) -> str:
         """Get a permalink URL for a Slack message."""

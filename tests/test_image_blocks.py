@@ -125,10 +125,33 @@ def test_post_image_only_message_raises():
         client.post(f'![card]({CARD})')
 
 
-def test_post_body_over_section_limit_with_image_raises():
+def test_post_body_over_section_limit_splits_at_paragraphs():
+    # Slack caps each section's text at 3000, not the message: a longer body
+    # spans several sections, each whole paragraphs, still one message.
+    client = _FakeSlackClient()
+    a, b, c = 'a' * 1500, 'b' * 1400, 'c' * 1000
+    client.post(f'{a}\n\n{b}\n\n{c}\n\n![card]({CARD})')
+    data = _payload(client, 'chat.postMessage')
+    assert data['blocks'] == [
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': f'{a}\n\n{b}'}},
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': c}},
+        {'type': 'image', 'image_url': CARD, 'alt_text': 'card'},
+    ]
+
+
+def test_split_sections_read_back_as_the_posted_content():
+    client = _FakeSlackClient()
+    content = f"{'a' * 2000}\n\n{'b' * 2000}\n\n![card]({CARD})"
+    client.post(content)
+    _, data = client.calls[-1]
+    assert [b['type'] for b in data['blocks']] == ['section', 'section', 'image']
+    assert SlackClient._message_markdown({'text': data['text'], 'blocks': data['blocks']}) == content
+
+
+def test_post_paragraph_over_section_limit_with_image_raises():
     client = _FakeSlackClient()
     body = 'x' * 3001
-    with pytest.raises(ValueError, match='section limit'):
+    with pytest.raises(ValueError, match='paragraph over'):
         client.post(f'{body}\n\n![card]({CARD})')
 
 
