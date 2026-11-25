@@ -92,25 +92,47 @@ HISTORY_PAGE_SIZE = 200
 _UPLOAD_SUFFIXES = {'.png', '.jpg', '.jpeg', '.gif'}
 
 
-def section_blocks(text: str) -> list[dict]:
+def section_blocks(text: str, *, lines: bool = False) -> list[dict]:
     """``text`` (wire mrkdwn) as ``section`` blocks of at most `SLACK_SECTION_LIMIT` chars each: one block when it
     fits, else split at paragraph breaks (blank lines), each block holding whole paragraphs. Slack caps a section's
     text, not the message's, so a long body above image blocks stays one message; `_message_markdown` joins the
     sections back with a blank line, so the split round-trips. A single paragraph over the limit raises: a split
-    inside one would read back as a paragraph break."""
+    inside one would read back as a paragraph break.
+
+    ``lines``: a paragraph over the limit is split at its line breaks instead, each block holding whole lines. That
+    split reads back with a blank line where it fell, so it's for a body the caller keeps itself and only ever posts
+    or edits whole (e.g. a rolling report), not one synced back from Slack. A single line over the limit still
+    raises."""
     chunks: list[str] = []
     for para in text.split('\n\n'):
         if len(para) > SLACK_SECTION_LIMIT:
-            raise ValueError(
-                f"Message body with image blocks has a paragraph over Slack's "
-                f"{SLACK_SECTION_LIMIT}-char section limit ({len(para)} chars); "
-                f"break it with a blank line, shorten it, or drop the image lines"
-            )
-        if chunks and len(chunks[-1]) + 2 + len(para) <= SLACK_SECTION_LIMIT:
+            if not lines:
+                raise ValueError(
+                    f"Message body with image blocks has a paragraph over Slack's "
+                    f"{SLACK_SECTION_LIMIT}-char section limit ({len(para)} chars); "
+                    f"break it with a blank line, shorten it, or drop the image lines"
+                )
+            chunks.extend(_line_chunks(para))
+        elif chunks and len(chunks[-1]) + 2 + len(para) <= SLACK_SECTION_LIMIT:
             chunks[-1] += '\n\n' + para
         else:
             chunks.append(para)
     return [{"type": "section", "text": {"type": "mrkdwn", "text": c}} for c in chunks]
+
+
+def _line_chunks(para: str) -> list[str]:
+    """``para``'s lines packed in order into pieces of at most `SLACK_SECTION_LIMIT` chars."""
+    out: list[str] = []
+    for line in para.split('\n'):
+        if len(line) > SLACK_SECTION_LIMIT:
+            raise ValueError(
+                f"Message body has a line over Slack's {SLACK_SECTION_LIMIT}-char section limit ({len(line)} chars)"
+            )
+        if out and len(out[-1]) + 1 + len(line) <= SLACK_SECTION_LIMIT:
+            out[-1] += '\n' + line
+        else:
+            out.append(line)
+    return out
 
 
 def _image_sha(data: bytes) -> str:

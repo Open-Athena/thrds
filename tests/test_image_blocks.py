@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from thrds.slack import SlackClient
+from thrds.slack import SlackClient, section_blocks
 
 
 class _FakeSlackClient(SlackClient):
@@ -153,6 +153,40 @@ def test_post_paragraph_over_section_limit_with_image_raises():
     body = 'x' * 3001
     with pytest.raises(ValueError, match='paragraph over'):
         client.post(f'{body}\n\n![card]({CARD})')
+
+
+def _texts(blocks: list[dict]) -> list[str]:
+    assert {b['type'] for b in blocks} == {'section'}
+    return [b['text']['text'] for b in blocks]
+
+
+def test_section_blocks_lines_splits_a_long_paragraph_at_line_breaks():
+    # 40 lines of 99 chars (+ '\n') = 3999 chars, one paragraph: 30 lines fill a section (2999 chars).
+    rows = [f'{i:02d}' + 'r' * 97 for i in range(40)]
+    para = '\n'.join(rows)
+    with pytest.raises(ValueError, match=r"^Message body with image blocks has a paragraph over Slack's 3000-char section limit \(3999 chars\); "):
+        section_blocks(para)
+    assert _texts(section_blocks(para, lines=True)) == ['\n'.join(rows[:30]), '\n'.join(rows[30:])]
+
+
+def test_section_blocks_lines_keeps_paragraph_packing():
+    # Paragraphs that fit pack at blank lines exactly as without `lines`; the line-split one's last piece can
+    # take a following short paragraph.
+    rows = [f'{i:02d}' + 'r' * 97 for i in range(40)]
+    head, tail = 'h' * 100, 't' * 100
+    text = '\n\n'.join([head, '\n'.join(rows), tail])
+    assert _texts(section_blocks(text, lines=True)) == [
+        head,
+        '\n'.join(rows[:30]),
+        '\n'.join(rows[30:]) + '\n\n' + tail,
+    ]
+    short = f'{head}\n\n{tail}'
+    assert section_blocks(short, lines=True) == section_blocks(short)
+
+
+def test_section_blocks_lines_raises_on_a_single_long_line():
+    with pytest.raises(ValueError, match=r"^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$"):
+        section_blocks('ok\n' + 'x' * 3001, lines=True)
 
 
 def test_post_empty_alt_warns():
