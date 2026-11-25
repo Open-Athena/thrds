@@ -82,6 +82,8 @@ SLACK_MESSAGE_LIMIT = 4000
 # A `section` block's text maxes out below the 4000 a plain `text` message
 # allows, so a body in between finalizes as text rather than being split.
 SLACK_SECTION_LIMIT = 3000
+# Blocks per message.
+SLACK_BLOCKS_LIMIT = 50
 # Page size for paginated `conversations.history` / `.replies` reads: Slack
 # recommends ≤200 (it allows up to 999 but may return fewer).
 HISTORY_PAGE_SIZE = 200
@@ -776,13 +778,14 @@ class SlackClient:
                 "('Also send to channel') only applies to a thread reply."
             )
         content = self._fold_images_into_content(content, images)
-        if len(content) > SLACK_MESSAGE_LIMIT:
-            raise ValueError(
-                f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
-            )
         resolved_raw = raw if raw is not None else self.raw
         # Raw consumers send wire mrkdwn verbatim — no image lifting either.
         body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
+        # A message with image blocks renders its sections (each capped by `section_blocks`), not the flat text.
+        if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
+            raise ValueError(
+                f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
+            )
         wire = content if resolved_raw else _md_to_slack(body)
         data: dict = {
             "channel": self.channel,
@@ -881,12 +884,13 @@ class SlackClient:
         if files:
             assert_files_attachable(self.username, self.icon_emoji, self.icon_url)
         content = self._fold_images_into_content(content, images)
-        if len(content) > SLACK_MESSAGE_LIMIT:
+        resolved_raw = raw if raw is not None else self.raw
+        body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
+        # A message with image blocks renders its sections (each capped by `section_blocks`), not the flat text.
+        if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
             raise ValueError(
                 f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
             )
-        resolved_raw = raw if raw is not None else self.raw
-        body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
         wire = content if resolved_raw else _md_to_slack(body)
         data: dict = {
             "channel": self.channel,
@@ -1284,6 +1288,8 @@ class SlackClient:
             data["blocks"] = [*head, *img_blocks, *tail]
         else:
             data["blocks"] = [*section_blocks(text), *img_blocks]
+        if len(data["blocks"]) > SLACK_BLOCKS_LIMIT:
+            raise ValueError(f"Message has {len(data['blocks'])} blocks, over Slack's {SLACK_BLOCKS_LIMIT}")
 
     def permalink(self, message_ts: str, channel: str | None = None) -> str:
         """Get a permalink URL for a Slack message."""
