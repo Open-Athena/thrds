@@ -23,3 +23,17 @@ When a message renders from blocks (image blocks lifted, so its body is `section
 ## Then
 
 Tell the disky cw session the sha (on `py`); it bumps disky's pin (`cloud/pyproject.toml`'s `thrds @ …/archive/<sha>.tar.gz`, and the lock), rebuilds cw's image and re-runs the digest. If the TS branch sends `text` beside blocks the same way, it needs the same cap.
+
+## Implemented
+
+`fallback_text(wire)` (`thrds/slack.py`): `wire` when it's within 4,000; else cut at the last line break that leaves room for `\n…`, or within a single over-long line (`wire[:3999] + '…'`). `_lift_image_blocks` applies it where it builds `[*section_blocks(text), *images]`, which is the only shape that can exceed 4,000, so `post` and `edit` both get it. The other block shapes already stay within the limit: finalized chrome puts a body of at most 3,000 chars in one section, and draft chrome folds its footer in only when the result fits within 4,000.
+
+Read-back is unaffected: `_message_markdown` reads a message with section blocks from the blocks, never the flat `text`, so a capped message doesn't look changed.
+
+Tests in `tests/test_image_blocks.py`, written first; post and edit failed with the full 4,260-char `text`:
+- `fallback_text` cuts at a line, keeps an exact-limit wire whole, and cuts a single over-long line within it.
+- `post` and `edit` with an image send a capped `text`, while their sections hold the whole body, which reads back as posted.
+- A body within the limit sends the whole wire.
+- A text-only body over the limit still raises.
+
+The bulk rewrite path (`thrds.rewrite`) doesn't use this yet. A `Desired` with blocks and text over 4,000 plans as `blocked`, so it can't hit `msg_too_long`. Capping there too means comparing a live, capped fallback to the desired text, which touches `same_content` and its TS parity, so it's a follow-up.

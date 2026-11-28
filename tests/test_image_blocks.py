@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import pytest
 
-from thrds.slack import SlackClient, section_blocks
+from thrds.slack import SLACK_MESSAGE_LIMIT, SlackClient, fallback_text, section_blocks
 
 
 class _FakeSlackClient(SlackClient):
@@ -187,6 +187,60 @@ def test_section_blocks_lines_keeps_paragraph_packing():
 def test_section_blocks_lines_raises_on_a_single_long_line():
     with pytest.raises(ValueError, match=r"^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$"):
         section_blocks('ok\n' + 'x' * 3001, lines=True)
+
+
+# --- the flat `text` beside blocks: Slack caps it at 4,000 (`msg_too_long`) whatever the blocks ---
+
+# Two paragraphs of 30 lines × 70 chars (2,129 chars each): 4,260 chars, each paragraph its own section.
+ROWS = [f'{i:02d} ' + 'p' * 67 for i in range(60)]
+LONG = '\n'.join(ROWS[:30]) + '\n\n' + '\n'.join(ROWS[30:])
+
+
+def test_fallback_text_cuts_at_a_line():
+    assert fallback_text('short') == 'short'
+    exact = 'x' * SLACK_MESSAGE_LIMIT
+    assert fallback_text(exact) == exact
+    # 56 whole lines fit in 3,976 chars, leaving room for '\n…'; the 57th would end past 3,998.
+    capped = fallback_text(LONG)
+    assert capped == '\n'.join(ROWS[:30]) + '\n\n' + '\n'.join(ROWS[30:56]) + '\n…'
+    assert len(capped) == 3978
+    # A line over the cap is cut within it.
+    assert fallback_text('y' * 5000) == 'y' * (SLACK_MESSAGE_LIMIT - 1) + '…'
+
+
+def test_post_with_image_caps_the_fallback_text():
+    client = _FakeSlackClient()
+    client.post(f'{LONG}\n\n![card]({CARD})')
+    data = _payload(client, 'chat.postMessage')
+    assert data['text'] == fallback_text(LONG)
+    assert data['blocks'] == [
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(ROWS[:30])}},
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(ROWS[30:])}},
+        {'type': 'image', 'image_url': CARD, 'alt_text': 'card'},
+    ]
+    # The blocks keep the whole body, and read back as the posted content.
+    assert SlackClient._message_markdown({'text': data['text'], 'blocks': data['blocks']}) == f'{LONG}\n\n![card]({CARD})'
+
+
+def test_edit_with_image_caps_the_fallback_text():
+    client = _FakeSlackClient()
+    client.edit('1.000001', f'{LONG}\n\n![card]({CARD})')
+    data = _payload(client, 'chat.update')
+    assert data['text'] == fallback_text(LONG)
+    assert [b['text']['text'] for b in data['blocks'][:2]] == ['\n'.join(ROWS[:30]), '\n'.join(ROWS[30:])]
+
+
+def test_fallback_text_within_the_limit_is_the_whole_wire():
+    client = _FakeSlackClient()
+    body = '\n'.join(ROWS[:30])
+    client.edit('1.000001', f'{body}\n\n![card]({CARD})')
+    assert _payload(client, 'chat.update')['text'] == body
+
+
+def test_text_only_over_the_limit_still_raises():
+    client = _FakeSlackClient()
+    with pytest.raises(ValueError, match=r"^Message exceeds Slack's 4000 char limit \(4260 chars\)$"):
+        client.edit('1.000001', LONG)
 
 
 def test_post_empty_alt_warns():

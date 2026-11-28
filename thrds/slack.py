@@ -120,6 +120,21 @@ def section_blocks(text: str, *, lines: bool = False) -> list[dict]:
     return [{"type": "section", "text": {"type": "mrkdwn", "text": c}} for c in chunks]
 
 
+def fallback_text(wire: str) -> str:
+    """``wire`` as a block message's top-level ``text``, within `SLACK_MESSAGE_LIMIT`.
+
+    Slack rejects ``text`` over 4,000 chars (``msg_too_long``) even when blocks carry the content. Beside blocks
+    it's only the notification / accessibility fallback, so a longer one is cut at the last line break that leaves
+    room for a trailing ``…`` (a single line over the cap is cut within it). The blocks keep the whole body, and
+    read-back (`_message_markdown`) uses them, not ``text``."""
+    if len(wire) <= SLACK_MESSAGE_LIMIT:
+        return wire
+    cut = wire.rfind('\n', 0, SLACK_MESSAGE_LIMIT - 1)
+    if cut > 0:
+        return wire[:cut] + '\n…'
+    return wire[:SLACK_MESSAGE_LIMIT - 1] + '…'
+
+
 def _line_chunks(para: str) -> list[str]:
     """``para``'s lines packed in order into pieces of at most `SLACK_SECTION_LIMIT` chars."""
     out: list[str] = []
@@ -803,7 +818,8 @@ class SlackClient:
         resolved_raw = raw if raw is not None else self.raw
         # Raw consumers send wire mrkdwn verbatim — no image lifting either.
         body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
-        # A message with image blocks renders its sections (each capped by `section_blocks`), not the flat text.
+        # A message with image blocks renders its sections (each capped by `section_blocks`); its flat text is
+        # only the fallback, capped by `fallback_text` in `_lift_image_blocks`.
         if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
             raise ValueError(
                 f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
@@ -908,7 +924,8 @@ class SlackClient:
         content = self._fold_images_into_content(content, images)
         resolved_raw = raw if raw is not None else self.raw
         body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
-        # A message with image blocks renders its sections (each capped by `section_blocks`), not the flat text.
+        # A message with image blocks renders its sections (each capped by `section_blocks`); its flat text is
+        # only the fallback, capped by `fallback_text` in `_lift_image_blocks`.
         if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
             raise ValueError(
                 f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
@@ -1282,8 +1299,9 @@ class SlackClient:
         chrome (`_attach_chrome` ran first):
 
         * no chrome → ``[*section_blocks(text), *images]``: one section, or
-          several split at blank lines past `SLACK_SECTION_LIMIT` (the flat
-          ``text`` stays as the notification fallback).
+          several split at blank lines past `SLACK_SECTION_LIMIT`; the flat
+          ``text`` stays as the notification fallback, capped by
+          `fallback_text` (Slack rejects ``text`` over 4,000 even beside blocks).
         * draft chrome → the footer is already folded into ``data["text"]``;
           the section carries that folded text so the chrome stays visible,
           and the flat-text fallback keeps `_live_chrome` reporting draft.
@@ -1310,6 +1328,7 @@ class SlackClient:
             data["blocks"] = [*head, *img_blocks, *tail]
         else:
             data["blocks"] = [*section_blocks(text), *img_blocks]
+            data["text"] = fallback_text(text)
         if len(data["blocks"]) > SLACK_BLOCKS_LIMIT:
             raise ValueError(f"Message has {len(data['blocks'])} blocks, over Slack's {SLACK_BLOCKS_LIMIT}")
 
