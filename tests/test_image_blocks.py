@@ -6,9 +6,11 @@ Also covers the user-token sender-override guard from the same spec.
 """
 from __future__ import annotations
 
+import json
+
 import pytest
 
-from thrds.slack import SLACK_MESSAGE_LIMIT, SlackClient, fallback_text, section_blocks
+from thrds.slack import SLACK_MESSAGE_LIMIT, SlackApiError, SlackClient, fallback_text, request_shape, section_blocks
 
 
 class _FakeSlackClient(SlackClient):
@@ -148,11 +150,33 @@ def test_split_sections_read_back_as_the_posted_content():
     assert SlackClient._message_markdown({'text': data['text'], 'blocks': data['blocks']}) == content
 
 
-def test_post_paragraph_over_section_limit_with_image_raises():
+def test_post_line_over_section_limit_with_image_raises():
     client = _FakeSlackClient()
     body = 'x' * 3001
-    with pytest.raises(ValueError, match='paragraph over'):
+    with pytest.raises(ValueError, match=r"^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$"):
         client.post(f'{body}\n\n![card]({CARD})')
+
+
+def test_post_paragraph_over_section_limit_splits_at_lines():
+    # Outside a staging sync, a paragraph over the section limit splits at its line breaks.
+    client = _FakeSlackClient()
+    rows = [f'{i:02d}' + 'r' * 97 for i in range(40)]
+    client.post('\n'.join(rows) + f'\n\n![card]({CARD})')
+    data = _payload(client, 'chat.postMessage')
+    assert data['blocks'] == [
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(rows[:30])}},
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(rows[30:])}},
+        {'type': 'image', 'image_url': CARD, 'alt_text': 'card'},
+    ]
+
+
+def test_sync_paragraph_over_section_limit_raises():
+    # In a staging sync the pull reads the message back into the doc, where a line split would become a paragraph break.
+    client = _FakeSlackClient()
+    client._chrome_by_content = {}
+    rows = [f'{i:02d}' + 'r' * 97 for i in range(40)]
+    with pytest.raises(ValueError, match=r"^Message body has a paragraph over Slack's 3000-char section limit \(3999 chars\); break it with a blank line or shorten it$"):
+        client.post('\n'.join(rows) + f'\n\n![card]({CARD})')
 
 
 def _texts(blocks: list[dict]) -> list[str]:
@@ -164,7 +188,7 @@ def test_section_blocks_lines_splits_a_long_paragraph_at_line_breaks():
     # 40 lines of 99 chars (+ '\n') = 3999 chars, one paragraph: 30 lines fill a section (2999 chars).
     rows = [f'{i:02d}' + 'r' * 97 for i in range(40)]
     para = '\n'.join(rows)
-    with pytest.raises(ValueError, match=r"^Message body with image blocks has a paragraph over Slack's 3000-char section limit \(3999 chars\); "):
+    with pytest.raises(ValueError, match=r"^Message body has a paragraph over Slack's 3000-char section limit \(3999 chars\); break it with a blank line or shorten it$"):
         section_blocks(para)
     assert _texts(section_blocks(para, lines=True)) == ['\n'.join(rows[:30]), '\n'.join(rows[30:])]
 
@@ -237,10 +261,86 @@ def test_fallback_text_within_the_limit_is_the_whole_wire():
     assert _payload(client, 'chat.update')['text'] == body
 
 
-def test_text_only_over_the_limit_still_raises():
+LONG_SECTIONS = [
+    {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(ROWS[:30])}},
+    {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(ROWS[30:])}},
+]
+
+
+def test_text_only_over_the_limit_goes_out_as_sections():
+    # The same path as a message with images: sections carry the body, `text` is the capped fallback.
     client = _FakeSlackClient()
-    with pytest.raises(ValueError, match=r"^Message exceeds Slack's 4000 char limit \(4260 chars\)$"):
-        client.edit('1.000001', LONG)
+    client.edit('1.000001', LONG)
+    data = _payload(client, 'chat.update')
+    assert (data['text'], data['blocks']) == (fallback_text(LONG), LONG_SECTIONS)
+    assert SlackClient._message_markdown({'text': data['text'], 'blocks': data['blocks']}) == LONG
+    client.post(LONG, thread_id='1.0')
+    data = _payload(client, 'chat.postMessage')
+    assert (data['text'], data['blocks'], data['thread_ts']) == (fallback_text(LONG), LONG_SECTIONS, '1.0')
+
+
+def test_raw_text_over_the_limit_goes_out_as_sections():
+    client = _FakeSlackClient()
+    client.edit('1.000001', LONG, raw=True)
+    data = _payload(client, 'chat.update')
+    assert (data['text'], data['blocks']) == (fallback_text(LONG), LONG_SECTIONS)
+
+
+def test_text_only_within_the_limit_stays_text():
+    client = _FakeSlackClient()
+    body = '\n'.join(ROWS[:56])
+    client.edit('1.000001', body)
+    data = _payload(client, 'chat.update')
+    assert (data['text'], data['blocks']) == (body, [])
+
+
+def test_text_only_over_the_block_limit_raises():
+    client = _FakeSlackClient()
+    body = '\n\n'.join('q' * 2999 for _ in range(51))
+    with pytest.raises(ValueError, match=r"^Message has 51 blocks, over Slack's 50$"):
+        client.post(body)
+
+
+def _refusing(monkeypatch, error: str) -> None:
+    """Slack answers every request ``{"ok": false, "error": error}``."""
+    class _R:
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def read(self): return json.dumps({'ok': False, 'error': error}).encode()
+    monkeypatch.setattr('thrds.slack.urllib.request.urlopen', lambda req, *a, **k: _R())
+
+
+def test_slack_api_error_carries_the_request_shape(monkeypatch):
+    _refusing(monkeypatch, 'msg_too_long')
+    client = SlackClient(token='xoxb-x', channel='C1')
+    with pytest.raises(SlackApiError) as e:
+        client.edit('1.0', f'{LONG}\n\n![card]({CARD})')
+    assert (e.value.endpoint, e.value.code, e.value.shape, str(e.value)) == (
+        'chat.update',
+        'msg_too_long',
+        'text 3978 chars, 3 blocks, longest section 2129 chars',
+        'Slack API error: msg_too_long (chat.update: text 3978 chars, 3 blocks, longest section 2129 chars)',
+    )
+    with pytest.raises(SlackApiError) as e:
+        client.post('short', raw=True)
+    assert (e.value.shape, str(e.value)) == (
+        'text 5 chars',
+        'Slack API error: msg_too_long (chat.postMessage: text 5 chars)',
+    )
+
+
+def test_slack_api_error_without_a_message_has_no_shape(monkeypatch):
+    _refusing(monkeypatch, 'message_not_found')
+    with pytest.raises(SlackApiError) as e:
+        SlackClient(token='xoxb-x', channel='C1')._request('chat.delete', {'channel': 'C1', 'ts': '1.0'})
+    assert (e.value.shape, str(e.value)) == (None, 'Slack API error: message_not_found')
+
+
+def test_request_shape():
+    assert request_shape(None) is None
+    assert request_shape({'channel': 'C1'}) is None
+    assert request_shape({'text': 'abc', 'blocks': []}) == 'text 3 chars, 0 blocks'
+    assert request_shape({'blocks': [{'type': 'image'}, {'type': 'section', 'text': {'type': 'mrkdwn', 'text': 'xy'}}]}) == '2 blocks, longest section 2 chars'
 
 
 def test_post_empty_alt_warns():

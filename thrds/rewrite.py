@@ -34,7 +34,7 @@ from difflib import unified_diff
 from enum import Enum
 from pathlib import Path
 
-from .slack import SLACK_MESSAGE_LIMIT, SlackApiError, SlackClient
+from .slack import SLACK_BLOCKS_LIMIT, SLACK_MESSAGE_LIMIT, SlackApiError, SlackClient, fallback_text, section_blocks
 
 PLAN_VERSION = 1
 
@@ -415,6 +415,21 @@ class Plan:
         return cls.from_json(json.loads(Path(path).read_text()))
 
 
+def sendable(text: str, blocks: list[dict] | None) -> tuple[str, list[dict] | None]:
+    """A rendered ``(text, blocks)`` as `SlackClient.post` / ``edit`` send it, under Slack's 4,000 on ``text``.
+
+    Text over `SLACK_MESSAGE_LIMIT` beside blocks becomes its `fallback_text`. Text-only over it goes out as
+    ``section_blocks(text, lines=True)`` with that fallback. Raises ``ValueError`` when Slack can't take it: a line
+    over the section limit, or more than `SLACK_BLOCKS_LIMIT` blocks."""
+    if len(text) <= SLACK_MESSAGE_LIMIT:
+        return text, blocks
+    if not blocks:
+        blocks = section_blocks(text, lines=True)
+        if len(blocks) > SLACK_BLOCKS_LIMIT:
+            raise ValueError(f"new text is {len(text)} chars, {len(blocks)} sections over Slack's {SLACK_BLOCKS_LIMIT} blocks")
+    return fallback_text(text), blocks
+
+
 def plan(found: Iterable[Found], render: Render, *, reorder_ok: bool = False) -> Plan:
     """One action per found message; pure (no Slack calls).
 
@@ -447,17 +462,16 @@ def plan(found: Iterable[Found], render: Render, *, reorder_ok: bool = False) ->
             continue
         if not isinstance(r, Desired):
             raise TypeError(f"render({f.ts}) returned {type(r).__name__}, not Desired or Skip")
-        new = Content(
-            text=r.text,
-            blocks=r.blocks,
-            sender=f.sender if r.sender is None else r.sender,
-            files=f.content.files,
-        )
+        sender = f.sender if r.sender is None else r.sender
+        try:
+            text, blocks = sendable(r.text, r.blocks)
+        except ValueError as e:
+            new = Content(text=r.text, blocks=r.blocks, sender=sender, files=f.content.files)
+            actions.append(PlannedAction(Kind.BLOCKED, new=new, reason=str(e), **base))
+            continue
+        new = Content(text=text, blocks=blocks, sender=sender, files=f.content.files)
         if same_content(f.content, new):
             actions.append(PlannedAction(Kind.NOOP, new=new, **base))
-            continue
-        if len(new.text) > SLACK_MESSAGE_LIMIT:
-            actions.append(PlannedAction(Kind.BLOCKED, new=new, reason=f"new text is {len(new.text)} chars, over {SLACK_MESSAGE_LIMIT}", **base))
             continue
         if new.sender == f.sender:
             actions.append(PlannedAction(Kind.EDIT, new=new, **base))

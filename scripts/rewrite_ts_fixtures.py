@@ -11,7 +11,7 @@ import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from tests.test_rewrite import DIGEST, FakeChannel, RICH, SAME_CASES, SECTION  # noqa: E402
+from tests.test_rewrite import DIGEST, LONG, LONG_IMAGE, LONG_LINE, LONG_SECTIONS, FakeChannel, RICH, SAME_CASES, SECTION  # noqa: E402
 from thrds.rewrite import Content, Desired, Sender, find_history, plan, same_content, substitute  # noqa: E402
 
 out = Path(sys.argv[1])
@@ -38,10 +38,21 @@ ch.add("3.0", "nothing to change")
 ch.add("4.0", "fallback :old:", blocks=[{"block_id": "s0", **SECTION}])
 ch.add("5.0", "a person :old:", ours=False)
 ch.add("6.0", "card :old:", metadata={"event_type": "fleet", "event_payload": {"id": 1}})
+# Over 4,000 chars of text, planned as `post` / `edit` send it (`sendable`). (Over 50 sections takes 75k+ chars: tested
+# on each side, not here.)
+for ts in ("7.0", "7.1", "7.2"):
+    ch.add(ts, "short")
 sub = substitute({":old:": ":new:"})
+LONG_RENDERS = {
+    "7.0": Desired(LONG),
+    "7.1": Desired(LONG, [*LONG_SECTIONS, LONG_IMAGE]),
+    "7.2": Desired(LONG_LINE),
+}
 
 
 def render(f):
+    if f.ts in LONG_RENDERS:
+        return LONG_RENDERS[f.ts]
     d = sub(f)
     return Desired(d.text, d.blocks, sender=DIGEST) if f.ts == "6.0" else d
 

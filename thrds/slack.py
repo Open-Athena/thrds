@@ -108,9 +108,8 @@ def section_blocks(text: str, *, lines: bool = False) -> list[dict]:
         if len(para) > SLACK_SECTION_LIMIT:
             if not lines:
                 raise ValueError(
-                    f"Message body with image blocks has a paragraph over Slack's "
-                    f"{SLACK_SECTION_LIMIT}-char section limit ({len(para)} chars); "
-                    f"break it with a blank line, shorten it, or drop the image lines"
+                    f"Message body has a paragraph over Slack's {SLACK_SECTION_LIMIT}-char section limit "
+                    f"({len(para)} chars); break it with a blank line or shorten it"
                 )
             chunks.extend(_line_chunks(para))
         elif chunks and len(chunks[-1]) + 2 + len(para) <= SLACK_SECTION_LIMIT:
@@ -182,14 +181,39 @@ def _slack_icon_url(msg: dict) -> str | None:
     return None
 
 
+def request_shape(data: dict | None) -> str | None:
+    """A message request's sizes, for an error about it: the ``text`` length, the block count and the longest
+    ``section``'s text length. ``None`` for a request with neither ``text`` nor ``blocks``."""
+    if not data or ("text" not in data and "blocks" not in data):
+        return None
+    parts = []
+    text = data.get("text")
+    if isinstance(text, str):
+        parts.append(f"text {len(text)} chars")
+    blocks = data.get("blocks")
+    if isinstance(blocks, list):
+        parts.append(f"{len(blocks)} blocks")
+        sections = [
+            len(b["text"]["text"]) for b in blocks
+            if isinstance(b, dict) and b.get("type") == "section" and isinstance((b.get("text") or {}).get("text"), str)
+        ]
+        if sections:
+            parts.append(f"longest section {max(sections)} chars")
+    return ", ".join(parts)
+
+
 class SlackApiError(RuntimeError):
     """A Slack Web API call that failed: ``code`` is Slack's error string
     (``file_not_found``, ``channel_not_found``, …), ``http_<status>``,
-    ``timeout`` or ``transport_error``."""
-    def __init__(self, endpoint: str, code: str, message: str | None = None):
-        super().__init__(message or f"Slack API error: {code}")
+    ``timeout`` or ``transport_error``. ``shape`` is the request's sizes
+    (`request_shape`) when it sent ``text`` or ``blocks``; the message ends
+    with it, so a ``msg_too_long`` / ``invalid_blocks`` says what was sent."""
+    def __init__(self, endpoint: str, code: str, message: str | None = None, shape: str | None = None):
+        message = message or f"Slack API error: {code}"
+        super().__init__(message if shape is None else f"{message} ({endpoint}: {shape})")
         self.endpoint = endpoint
         self.code = code
+        self.shape = shape
 
     @property
     def definite(self) -> bool:
@@ -494,7 +518,7 @@ class SlackClient:
                     time.sleep(retry_after)
                     continue
                 raise SlackApiError(
-                    endpoint, f"http_{e.code}", f"Slack API error: {e.code} {e.read().decode()}",
+                    endpoint, f"http_{e.code}", f"Slack API error: {e.code} {e.read().decode()}", request_shape(data),
                 ) from e
         if not result.get("ok"):
             error = result.get("error")
@@ -502,6 +526,7 @@ class SlackClient:
                 endpoint,
                 error if isinstance(error, str) else "unknown_error",
                 f"Slack API error: {result.get('error', result)}",
+                request_shape(data),
             )
         return result
 
@@ -818,12 +843,6 @@ class SlackClient:
         resolved_raw = raw if raw is not None else self.raw
         # Raw consumers send wire mrkdwn verbatim — no image lifting either.
         body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
-        # A message with image blocks renders its sections (each capped by `section_blocks`); its flat text is
-        # only the fallback, capped by `fallback_text` in `_lift_image_blocks`.
-        if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
-            raise ValueError(
-                f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
-            )
         wire = content if resolved_raw else _md_to_slack(body)
         data: dict = {
             "channel": self.channel,
@@ -863,7 +882,7 @@ class SlackClient:
                 f"(xoxb-…): Slack ignores `chat.postMessage` sender customization "
                 f"on user (xoxp-…) tokens. Use a bot token, or drop the override."
             )
-        if image_refs:
+        if image_refs or len(wire) > SLACK_MESSAGE_LIMIT:
             self._lift_image_blocks(data, image_refs)
         if thread_id is not None:
             data["thread_ts"] = thread_id
@@ -924,12 +943,6 @@ class SlackClient:
         content = self._fold_images_into_content(content, images)
         resolved_raw = raw if raw is not None else self.raw
         body, image_refs = (content, []) if resolved_raw else split_trailing_images(content)
-        # A message with image blocks renders its sections (each capped by `section_blocks`); its flat text is
-        # only the fallback, capped by `fallback_text` in `_lift_image_blocks`.
-        if not image_refs and len(content) > SLACK_MESSAGE_LIMIT:
-            raise ValueError(
-                f"Message exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit ({len(content)} chars)"
-            )
         wire = content if resolved_raw else _md_to_slack(body)
         data: dict = {
             "channel": self.channel,
@@ -939,7 +952,7 @@ class SlackClient:
             "unfurl_media": not self._suppress_unfurls,
         }
         self._attach_chrome(data, content, wire)
-        if image_refs:
+        if image_refs or len(wire) > SLACK_MESSAGE_LIMIT:
             self._lift_image_blocks(data, image_refs)
         elif not resolved_raw and "blocks" not in data:
             # Declarative blocks: `chat.update` leaves existing blocks in
@@ -1291,7 +1304,10 @@ class SlackClient:
         return self._uploaded_file_ids[sha]
 
     def _lift_image_blocks(self, data: dict, images: list[ImageRef]) -> None:
-        """Render trailing `![alt](url)` doc lines as Block Kit `image` blocks.
+        """Render trailing `![alt](url)` doc lines as Block Kit `image` blocks,
+        and send a body over `SLACK_MESSAGE_LIMIT` as ``section`` blocks
+        (``images`` empty), so a caller only meets the per-section and
+        per-message block limits, never the 4,000 on ``text``.
 
         The message goes out as blocks (`section` body + `image`s) because an
         attached file can't be edited but an image block's URL can — see
@@ -1302,6 +1318,10 @@ class SlackClient:
           several split at blank lines past `SLACK_SECTION_LIMIT`; the flat
           ``text`` stays as the notification fallback, capped by
           `fallback_text` (Slack rejects ``text`` over 4,000 even beside blocks).
+          Outside a staging sync a paragraph over the section limit splits at
+          its line breaks (``section_blocks(lines=True)``); in a sync, whose
+          pull reads the message back into the doc, it raises instead, since
+          that split would read back as a paragraph break.
         * draft chrome → the footer is already folded into ``data["text"]``;
           the section carries that folded text so the chrome stays visible,
           and the flat-text fallback keeps `_live_chrome` reporting draft.
@@ -1327,7 +1347,7 @@ class SlackClient:
             tail = [b for b in existing if b.get("type") == "context"]
             data["blocks"] = [*head, *img_blocks, *tail]
         else:
-            data["blocks"] = [*section_blocks(text), *img_blocks]
+            data["blocks"] = [*section_blocks(text, lines=self._chrome_by_content is None), *img_blocks]
             data["text"] = fallback_text(text)
         if len(data["blocks"]) > SLACK_BLOCKS_LIMIT:
             raise ValueError(f"Message has {len(data['blocks'])} blocks, over Slack's {SLACK_BLOCKS_LIMIT}")

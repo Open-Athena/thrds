@@ -271,7 +271,7 @@ What each transport can do. The columns are the five sync clients — Slack (`Sl
 | Custom emoji inline in text | ✅³ | ✅³ | ✅³ | ❌ | ✅³ |
 | Labeled link (`[text](url)`, text ≠ URL) | ✅⁴ | ✅⁴ | ✅⁴ | ❌⁴ | ❌⁴ |
 | — with an emoji in the label | ⚠️⁵ | ❌⁵ | ✅⁵ | ❌ | ❌ |
-| Per-message char limit | 4000 | 2000 | 2000 | 300 / paragraph |
+| Per-message char limit | 4000⁷ | 2000 | 2000 | 300 / paragraph |
 
 ¹ Slack and Bluesky thread *implicitly*: a reply addresses the OP's own id (Slack's `thread_ts`, Bluesky's reply refs), so any message is already a thread root — there is no separate "create thread" call. Discord's thread is a distinct channel that must be `create_thread`'d off the OP (a message id isn't a channel), which is why `sync` has the `open_thread` seam that only `DiscordClient` implements.
 
@@ -284,6 +284,8 @@ What each transport can do. The columns are the five sync clients — Slack (`Sl
 ⁵ An emoji *inside* the link's label — narrower than emoji inline in text (footnote ³), and a thrds-only styling reach (no Discord/Slack client lets you hand-compose one). **Slack** (⚠️): a raw Unicode character renders (it's just text in the label), but a `:shortcode:` — standard *or* custom — stays **literal** (emoji substitution doesn't run inside a link label), so a custom emoji, which has no Unicode form, can't appear in a Slack link at all. **Discord bot** (❌): any emoji in the label, Unicode or `<:name:id>`, **breaks the whole link** — it falls back to literal `[…](…)` (a *bare* emoji renders fine, just not inside a link). **Discord app-owned webhook** (✅): both Unicode and custom `<:name:id>` render in the label (a *user-created* webhook first strips `<:name:id>` to `:name:` per footnote ³, so custom shows literal there). Verified live 2026-09-15.
 
 ⁶ **Mastodon edits in place** — `PUT /api/v1/statuses/:id` (available since Mastodon v3.5) keeps the status id and its boosts / favourites / replies, so `MastodonClient.edit` never falls back to delete+repost. This is the property Bluesky lacks and the reason thrds grew a Mastodon target (`specs/done/mastodon-platform.md`); the client and `thrds mastodon push` are implemented and tested against an emulator.
+
+⁷ On a message's `text`. A longer body (Slack `post` / `edit`) goes out as `section` blocks of at most 3,000 chars each, split at blank lines, with `text` cut to fit as the notification fallback (`fallback_text`). Outside a staging sync a paragraph over 3,000 splits at its line breaks; in a sync it raises, since that split would pull back as a paragraph break. What's left is Slack's per-section and 50-block limits: a single line over 3,000 raises.
 
 Reading the table:
 
@@ -410,6 +412,8 @@ report = apply(p, slack, dry_run=False, receipts="plan.receipts.jsonl")
    - `noop`;
    - `skip`;
    - `blocked`, for another author's message, a sender change on a message with replies or one that isn't last in its channel or thread (`reorder_ok` allows the move), or files under a new sender override.
+
+   New text over 4,000 chars is planned as `post` / `edit` send it (`sendable`): beside blocks it becomes the capped fallback, and text-only it goes out as `section` blocks split at line breaks, with that fallback. It's `blocked` only when Slack can't take it: a line over 3,000 chars, or more than 50 sections.
 4. **Apply:** re-reads each message first. If its content no longer matches the planned hash, the action is `stale` and nothing is written. If it already shows the new content, it's `already`. Writes are paced, 1.2 s apart by default. A repost posts the new message before deleting the old one, keeping the old message's metadata and files. With `receipts`, a re-run skips what's done.
 
 **Same content** (`noop` when planning, `already` when applying) is compared as Slack stores a message. `&amp;` `&lt;` `&gt;` equal `&` `<` `>`, in the text and in every block string. With blocks, the blocks are what renders, and the text is only the notification fallback, so its runs of whitespace don't count but its words do. Without blocks the text must match. Also ignored: block ids, the size fields Slack adds to an image block, and a mrkdwn text's default `verbatim: false` or a plain_text's default `emoji: true`.

@@ -129,20 +129,13 @@ def test_slack_sync_linked_raises_on_undersized_placeholder():
         client.sync_linked(linked, pace=0.0, jitter=0.0)
 
 
-def test_slack_post_raises_on_over_limit():
-    """`SlackClient.post` must guard against > SLACK_MESSAGE_LIMIT content."""
+def test_slack_post_and_edit_raise_on_a_line_over_the_section_limit():
+    """A body over `SLACK_MESSAGE_LIMIT` goes out as sections (`tests/test_image_blocks.py`); a line no section can hold raises."""
     from thrds.slack import SLACK_MESSAGE_LIMIT
     client = _FakeSlackClient({})
-    with pytest.raises(ValueError, match=rf"exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit"):
-        client.post("x" * (SLACK_MESSAGE_LIMIT + 1))
-
-
-def test_slack_edit_raises_on_over_limit():
-    """`SlackClient.edit` must guard against > SLACK_MESSAGE_LIMIT content."""
-    from thrds.slack import SLACK_MESSAGE_LIMIT
-    client = _FakeSlackClient({})
-    with pytest.raises(ValueError, match=rf"exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit"):
-        client.edit("1.000001", "x" * (SLACK_MESSAGE_LIMIT + 1))
+    for send in (lambda c: client.post(c), lambda c: client.edit("1.000001", c)):
+        with pytest.raises(ValueError, match=r"^Message body has a line over Slack's 3000-char section limit \(4001 chars\)$"):
+            send("x" * (SLACK_MESSAGE_LIMIT + 1))
 
 
 def _mk_curl_result(body: str, status: int, returncode: int = 0, stderr: str = "") -> subprocess.CompletedProcess:

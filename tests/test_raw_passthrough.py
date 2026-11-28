@@ -141,20 +141,18 @@ def test_edit_raw_preserves_channel_and_ts():
     }
 
 
-# --- char-limit check still applies under raw ---
+# --- over the 4,000 on `text`, raw goes out as sections too ---
 
-def test_post_raw_still_enforces_char_limit():
-    """Char-limit check runs on `content`, not wire — raw doesn't bypass it."""
-    import pytest
-    from thrds.slack import SLACK_MESSAGE_LIMIT
+def test_raw_over_the_limit_goes_out_as_sections():
+    """Raw skips md→mrkdwn, not the section path: sections carry the wire, `text` is the capped fallback."""
+    from thrds.slack import SLACK_MESSAGE_LIMIT, fallback_text
     client = _FakeSlackClient(raw=True)
-    with pytest.raises(ValueError, match=f"exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit"):
-        client.post('x' * (SLACK_MESSAGE_LIMIT + 1))
-
-
-def test_edit_raw_still_enforces_char_limit():
-    import pytest
-    from thrds.slack import SLACK_MESSAGE_LIMIT
-    client = _FakeSlackClient(raw=True)
-    with pytest.raises(ValueError, match=f"exceeds Slack's {SLACK_MESSAGE_LIMIT} char limit"):
-        client.edit('1.000001', 'x' * (SLACK_MESSAGE_LIMIT + 1))
+    rows = [f'{i:02d} *' + 'r' * 66 + '*' for i in range(60)]
+    wire = '\n'.join(rows)
+    assert len(wire) > SLACK_MESSAGE_LIMIT
+    client.post(wire)
+    _, data = client.calls[-1]
+    assert (data['text'], data['blocks']) == (fallback_text(wire), [
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(rows[:41])}},
+        {'type': 'section', 'text': {'type': 'mrkdwn', 'text': '\n'.join(rows[41:])}},
+    ])

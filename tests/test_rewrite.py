@@ -21,9 +21,10 @@ from thrds.rewrite import (
     find_thread,
     plan,
     same_content,
+    sendable,
     substitute,
 )
-from thrds.slack import SlackApiError, SlackClient
+from thrds.slack import SlackApiError, SlackClient, fallback_text
 
 US, BOT = "UBOT", "BBOT"
 
@@ -258,6 +259,62 @@ def test_compares_content_as_slack_stores_it():
     assert [(o.ts, o.status.value) for o in apply(p, ch, dry_run=False, pace=0).outcomes] == [("1.0", "done")]
     assert ch.msgs["1.0"]["text"] == R2_WANT_TEXT.replace("&", "&amp;")
     assert [(o.ts, o.status.value) for o in apply(p, ch, dry_run=False, pace=0).outcomes] == [("1.0", "already")]
+
+
+# Two paragraphs of 30 lines × 70 chars: 4,260 chars, over the 4,000 on `text`; each paragraph fits a section.
+LONG_ROWS = [f"{i:02d} " + "p" * 67 for i in range(60)]
+LONG = "\n".join(LONG_ROWS[:30]) + "\n\n" + "\n".join(LONG_ROWS[30:])
+LONG_SECTIONS = [
+    {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(LONG_ROWS[:30])}},
+    {"type": "section", "text": {"type": "mrkdwn", "text": "\n".join(LONG_ROWS[30:])}},
+]
+LONG_IMAGE = {"type": "image", "image_url": "https://example.com/plot.png", "alt_text": "plot"}
+# Sendable, but over 50 sections.
+LONG_MANY = "\n\n".join("q" * 2999 for _ in range(51))
+# Over 4,000, with a line over the 3,000-char section limit.
+LONG_LINE = "x" * 3001 + "\n" + "y" * 1500
+
+
+def test_sendable():
+    assert sendable("short", None) == ("short", None)
+    assert sendable(LONG, [*LONG_SECTIONS, LONG_IMAGE]) == (fallback_text(LONG), [*LONG_SECTIONS, LONG_IMAGE])
+    assert sendable(LONG, None) == (fallback_text(LONG), LONG_SECTIONS)
+    with pytest.raises(ValueError, match=r"^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$"):
+        sendable(LONG_LINE, None)
+    with pytest.raises(ValueError, match=r"^new text is 153049 chars, 51 sections over Slack's 50 blocks$"):
+        sendable(LONG_MANY, None)
+
+
+def test_long_text_plans_as_post_and_edit_send_it():
+    ch = FakeChannel()
+    for ts in ("1.0", "2.0", "3.0", "4.0", "5.0"):
+        ch.add(ts, "short")
+    # Written by `SlackClient.edit`: sections and the capped fallback.
+    ch.edit("1.0", f"{LONG}\n\n![plot]({LONG_IMAGE['image_url']})")
+    ch.edit("2.0", LONG)
+    ch.writes.clear()
+    want = {
+        "1.0": Desired(LONG, [*LONG_SECTIONS, LONG_IMAGE]),
+        "2.0": Desired(LONG),
+        "3.0": Desired(LONG),
+        "4.0": Desired(LONG_LINE),
+        "5.0": Desired(LONG_MANY),
+    }
+    p = plan(find_ids(ch, list(want)), lambda f: want[f.ts])
+    assert kinds(p) == [
+        ("1.0", "noop", None),
+        ("2.0", "noop", None),
+        ("3.0", "edit", None),
+        ("4.0", "blocked", "Message body has a line over Slack's 3000-char section limit (3001 chars)"),
+        ("5.0", "blocked", "new text is 153049 chars, 51 sections over Slack's 50 blocks"),
+    ]
+    by_ts = {a.ts: a for a in p.actions}
+    assert by_ts["3.0"].new == Content(fallback_text(LONG), blocks=LONG_SECTIONS)
+    assert by_ts["4.0"].new == Content(LONG_LINE)
+    report = apply(p, ch, dry_run=False, pace=0)
+    assert [(o.ts, o.status.value) for o in report.outcomes] == [("3.0", "done")]
+    assert ch.writes == [("chat.update", {"channel": "C1", "ts": "3.0", "text": fallback_text(LONG), "blocks": LONG_SECTIONS})]
+    assert [(o.ts, o.status.value) for o in apply(p, ch, dry_run=False, pace=0).outcomes] == [("3.0", "already")]
 
 
 # `same_content` cases; also TS parity fixtures (`scripts/rewrite_ts_fixtures.py`).
