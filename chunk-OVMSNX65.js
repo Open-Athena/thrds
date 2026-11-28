@@ -244,6 +244,46 @@ ${linked.summarySuffix}` : linked.summarySuffix;
 
 // src/slack.ts
 var SLACK_MESSAGE_LIMIT = 4e3;
+var SLACK_SECTION_LIMIT = 3e3;
+var SLACK_BLOCKS_LIMIT = 50;
+var codePoints = (s) => {
+  let n = 0;
+  for (const _ of s) n++;
+  return n;
+};
+function sectionBlocks(text, options = {}) {
+  const chunks = [];
+  const pack = (piece, sep, out) => {
+    const last = out.length - 1;
+    if (last >= 0 && codePoints(out[last]) + sep.length + codePoints(piece) <= SLACK_SECTION_LIMIT) out[last] += sep + piece;
+    else out.push(piece);
+  };
+  for (const para of text.split("\n\n")) {
+    const n = codePoints(para);
+    if (n <= SLACK_SECTION_LIMIT) {
+      pack(para, "\n\n", chunks);
+      continue;
+    }
+    if (!options.lines) {
+      throw new Error(`Message body has a paragraph over Slack's ${SLACK_SECTION_LIMIT}-char section limit (${n} chars); break it with a blank line or shorten it`);
+    }
+    const lines = [];
+    for (const line of para.split("\n")) {
+      const m = codePoints(line);
+      if (m > SLACK_SECTION_LIMIT) throw new Error(`Message body has a line over Slack's ${SLACK_SECTION_LIMIT}-char section limit (${m} chars)`);
+      pack(line, "\n", lines);
+    }
+    chunks.push(...lines);
+  }
+  return chunks.map((c) => ({ type: "section", text: { type: "mrkdwn", text: c } }));
+}
+function fallbackText(wire) {
+  const cps = Array.from(wire);
+  if (cps.length <= SLACK_MESSAGE_LIMIT) return wire;
+  const cut = cps.lastIndexOf("\n", SLACK_MESSAGE_LIMIT - 2);
+  if (cut > 0) return cps.slice(0, cut).join("") + "\n\u2026";
+  return cps.slice(0, SLACK_MESSAGE_LIMIT - 1).join("") + "\u2026";
+}
 var USERNAME_MAX = 80;
 var slackBullet = (section, url) => `- <${url}|*${section.title}*> \u2014 ${section.summary}`;
 var DETAIL_URL_PLACEHOLDER = "x".repeat(130);
@@ -1215,6 +1255,11 @@ export {
   buildDetailMessages,
   buildSummaryMessages,
   SLACK_MESSAGE_LIMIT,
+  SLACK_SECTION_LIMIT,
+  SLACK_BLOCKS_LIMIT,
+  codePoints,
+  sectionBlocks,
+  fallbackText,
   USERNAME_MAX,
   USER_TTL_MS,
   NOT_FOUND_TTL_MS,
@@ -1236,4 +1281,4 @@ export {
   withFiles,
   SlackClient
 };
-//# sourceMappingURL=chunk-HPZHNZX4.js.map
+//# sourceMappingURL=chunk-OVMSNX65.js.map

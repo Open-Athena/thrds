@@ -9,7 +9,9 @@ import {
   NON_IDEMPOTENT,
   NOT_FOUND_TTL_MS,
   SLACK_API,
+  SLACK_BLOCKS_LIMIT,
   SLACK_MESSAGE_LIMIT,
+  SLACK_SECTION_LIMIT,
   SlackApiError,
   SlackClient,
   USERNAME_MAX,
@@ -18,11 +20,14 @@ import {
   attachedFiles,
   buildDetailMessages,
   buildSummaryMessages,
+  codePoints,
   collect,
   defaultBullet,
   definitelyNotAttached,
+  fallbackText,
   isProcessed,
   paginate,
+  sectionBlocks,
   senderOverrides,
   slackApi,
   slackCall,
@@ -31,7 +36,7 @@ import {
   toBytes,
   webClientTransport,
   withFiles
-} from "./chunk-HPZHNZX4.js";
+} from "./chunk-OVMSNX65.js";
 import {
   EditRateLimited,
   OrphanedRepliesError,
@@ -775,6 +780,16 @@ function threadStore(client, threadTs) {
 }
 
 // src/rewrite-slack.ts
+function sendable(text, blocks) {
+  const n = codePoints(text);
+  if (n <= SLACK_MESSAGE_LIMIT) return { text, blocks };
+  if (blocks !== null && blocks.length > 0) return { text: fallbackText(text), blocks };
+  const sections = sectionBlocks(text, { lines: true });
+  if (sections.length > SLACK_BLOCKS_LIMIT) {
+    throw new Error(`new text is ${n} chars, ${sections.length} sections over Slack's ${SLACK_BLOCKS_LIMIT} blocks`);
+  }
+  return { text: fallbackText(text), blocks: sections };
+}
 var keep = (f, includeForeign) => includeForeign || f.ours && POST_SUBTYPES.includes(f.subtype);
 async function newestTopLevel(client, channel) {
   const r = await client.api("conversations.history", { channel, limit: 1 }, { get: true });
@@ -901,18 +916,18 @@ async function plan(found, render, options = {}) {
       actions2.push(action("skip", { reason: r.skip }));
       continue;
     }
-    const next = {
-      text: r.text,
-      blocks: r.blocks ?? null,
-      sender: r.sender ?? f.content.sender,
-      files: f.content.files
-    };
-    if (sameContent(f.content, next)) {
-      actions2.push(action("noop", { new: next }));
+    const sender = r.sender ?? f.content.sender;
+    let sent;
+    try {
+      sent = sendable(r.text, r.blocks ?? null);
+    } catch (e) {
+      const asRendered = { text: r.text, blocks: r.blocks ?? null, sender, files: f.content.files };
+      actions2.push(action("blocked", { new: asRendered, reason: e.message }));
       continue;
     }
-    if (next.text.length > SLACK_MESSAGE_LIMIT) {
-      actions2.push(action("blocked", { new: next, reason: `new text is ${next.text.length} chars, over ${SLACK_MESSAGE_LIMIT}` }));
+    const next = { ...sent, sender, files: f.content.files };
+    if (sameContent(f.content, next)) {
+      actions2.push(action("noop", { new: next }));
       continue;
     }
     if (sameSender(next.sender, f.content.sender)) {
@@ -1069,7 +1084,9 @@ export {
   REWRITE_KINDS,
   REWRITE_STATUSES,
   SLACK_API,
+  SLACK_BLOCKS_LIMIT,
   SLACK_MESSAGE_LIMIT,
+  SLACK_SECTION_LIMIT,
   SLOT_KEY,
   SLOT_NAME,
   SlackApiError,
@@ -1086,6 +1103,7 @@ export {
   buildPermalink,
   buildSummaryMessages,
   button,
+  codePoints,
   collect,
   contentHash,
   contentKey,
@@ -1100,6 +1118,7 @@ export {
   divider,
   encodePrivateMetadata,
   escape,
+  fallbackText,
   findHistory,
   findIds,
   findThread,
@@ -1138,6 +1157,8 @@ export {
   rich,
   sameContent,
   section,
+  sectionBlocks,
+  sendable,
   senderChanged,
   senderOf,
   senderOverrides,

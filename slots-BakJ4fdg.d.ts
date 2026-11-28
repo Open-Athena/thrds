@@ -1,5 +1,5 @@
 import { d as MsgLike, M as Message, c as Msg } from './core-BNb_OG-w.js';
-import { u as SlackMessage, q as SlackClient, o as SenderOverrides, e as FileSpec, i as FilesSwap } from './slack-DsYQB40e.js';
+import { x as SlackMessage, t as SlackClient, r as SenderOverrides, e as FileSpec, i as FilesSwap } from './slack-CBVpZ3hd.js';
 
 /** Where a slot's message lives, and a hash of what was last sent there (`""`: unknown, so the next run edits once). */
 interface SlotRecord {

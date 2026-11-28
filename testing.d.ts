@@ -1,4 +1,4 @@
-import { r as SlackClientOptions, q as SlackClient } from './slack-DsYQB40e.js';
+import { u as SlackClientOptions, t as SlackClient } from './slack-CBVpZ3hd.js';
 import './core-BNb_OG-w.js';
 
 /**

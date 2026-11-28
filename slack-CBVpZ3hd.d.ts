@@ -141,6 +141,35 @@ declare function buildDetailMessages(sections: Section[], limit: number): [strin
 declare function buildSummaryMessages(linked: LinkedThread, sectionUrls: string[], limit: number, bulletFn?: BulletFn): string[];
 
 declare const SLACK_MESSAGE_LIMIT = 4000;
+/** A `section` block's text maxes out at 3,000 chars, below the 4,000 on a message's `text`. */
+declare const SLACK_SECTION_LIMIT = 3000;
+/** Blocks per message. */
+declare const SLACK_BLOCKS_LIMIT = 50;
+/** Length in code points, as Python counts it (`len`), so both sides cut and cap at the same places. */
+declare const codePoints: (s: string) => number;
+type SectionBlock = {
+    type: "section";
+    text: {
+        type: "mrkdwn";
+        text: string;
+    };
+};
+/**
+ * `text` (wire mrkdwn) as `section` blocks of at most `SLACK_SECTION_LIMIT` chars each: one block when it fits, else
+ * split at paragraph breaks (blank lines), each block holding whole paragraphs. A paragraph over the limit throws,
+ * or with `lines` splits at its line breaks, each block holding whole lines (that split reads back with a blank line
+ * where it fell). A single line over the limit throws. Python's `thrds.slack.section_blocks`.
+ */
+declare function sectionBlocks(text: string, options?: {
+    lines?: boolean;
+}): SectionBlock[];
+/**
+ * `wire` as a block message's top-level `text`, within `SLACK_MESSAGE_LIMIT`. Slack rejects `text` over 4,000 chars
+ * (`msg_too_long`) even beside blocks, where it's only the notification fallback: a longer one is cut at the last line
+ * break that leaves room for a trailing `…` (a single line over the cap is cut within it). Python's
+ * `thrds.slack.fallback_text`.
+ */
+declare function fallbackText(wire: string): string;
 /** Slack shows at most 80 characters of a `username` override. */
 declare const USERNAME_MAX = 80;
 /** Found users are cached this long; `users_not_found` for `NOT_FOUND_TTL_MS`; failures not at all. */
@@ -632,4 +661,4 @@ declare class SlackClient implements ThreadClient {
     }): Promise<LinkedSyncResult>;
 }
 
-export { swapFiles as $, type AttachedFile as A, type BulletFn as B, CHANNEL_TTL_MS as C, USER_TTL_MS as D, type UploadData as E, FILE_HASHES as F, type UploadOptions as G, assertFilesAttachable as H, attachedFiles as I, buildDetailMessages as J, buildSummaryMessages as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, collect as O, defaultBullet as P, definitelyNotAttached as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, isProcessed as V, paginate as W, senderOverrides as X, slackApi as Y, slackCall as Z, splitBody as _, type Auth as a, toBytes as a0, webClientTransport as a1, withFiles as a2, type CallOptions as b, CustomSenderFilesError as c, FileNotProcessedError as d, type FileSpec as e, type FileSwap as f, FileSwapError as g, FilesNotAttachedError as h, type FilesSwap as i, type LinkedThread as j, NOT_FOUND_TTL_MS as k, type RetryInfo as l, SLACK_MESSAGE_LIMIT as m, type Section as n, type SenderOverrides as o, SlackApiError as p, SlackClient as q, type SlackClientOptions as r, type SlackDeleteOptions as s, type SlackErrorKind as t, type SlackMessage as u, type SlackPostOptions as v, type SlackResponse as w, type SlackSyncOptions as x, type SlackUser as y, type TransportOptions as z };
+export { paginate as $, type AttachedFile as A, type BulletFn as B, CHANNEL_TTL_MS as C, type SlackSyncOptions as D, type SlackUser as E, FILE_HASHES as F, type TransportOptions as G, USER_TTL_MS as H, type UploadData as I, type UploadOptions as J, assertFilesAttachable as K, type LinkedSyncResult as L, MAX_CACHED_USERS as M, NON_IDEMPOTENT as N, attachedFiles as O, buildDetailMessages as P, buildSummaryMessages as Q, type Reaction as R, SLACK_API as S, type Transport as T, USERNAME_MAX as U, codePoints as V, collect as W, defaultBullet as X, definitelyNotAttached as Y, fallbackText as Z, isProcessed as _, type Auth as a, sectionBlocks as a0, senderOverrides as a1, slackApi as a2, slackCall as a3, splitBody as a4, swapFiles as a5, toBytes as a6, webClientTransport as a7, withFiles as a8, type CallOptions as b, CustomSenderFilesError as c, FileNotProcessedError as d, type FileSpec as e, type FileSwap as f, FileSwapError as g, FilesNotAttachedError as h, type FilesSwap as i, type LinkedThread as j, NOT_FOUND_TTL_MS as k, type RetryInfo as l, SLACK_BLOCKS_LIMIT as m, SLACK_MESSAGE_LIMIT as n, SLACK_SECTION_LIMIT as o, type Section as p, type SectionBlock as q, type SenderOverrides as r, SlackApiError as s, SlackClient as t, type SlackClientOptions as u, type SlackDeleteOptions as v, type SlackErrorKind as w, type SlackMessage as x, type SlackPostOptions as y, type SlackResponse as z };
