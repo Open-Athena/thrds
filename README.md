@@ -405,16 +405,19 @@ report = apply(p, slack, dry_run=False, receipts="plan.receipts.jsonl")
 ```
 
 1. **Find:** `find_history` (optionally with replies), `find_thread` or `find_ids`. Each `Found` has the wire text, blocks, sender, files and its place in the thread. Only this token's own posts are included, matched by bot or user id, never by `username`.
-2. **Render:** the app's `render(found) -> Desired(text, blocks=None, sender=None) | Skip(reason)`, which re-derives the message from its own data. `substitute(mapping)` is a built-in render. It rewrites text and blocks, and renames `emoji` elements. It drops blocks that are only `rich_text`, so Slack re-derives them from the new text.
+2. **Render:** the app's `render(found) -> Desired(text, blocks=None, sender=None) | Skip(reason) | Delete(reason=None)`, which re-derives the message from its own data. `substitute(mapping)` is a built-in render. It rewrites text and blocks, and renames `emoji` elements. It drops blocks that are only `rich_text`, so Slack re-derives them from the new text.
 3. **Plan:** pure, and serializable as JSON. Each message gets one action:
    - `edit`;
    - `repost`, when the sender changes, which `chat.update` can't do;
+   - `delete`, when the render returns `Delete` (`blocked` for a message with replies);
    - `noop`;
    - `skip`;
    - `blocked`, for another author's message, a sender change on a message with replies or one that isn't last in its channel or thread (`reorder_ok` allows the move), or files under a new sender override.
 
+   `plan(found, render, posts=[Post(channel, thread_ts, Desired(…), key=None)])` adds a `post` per new message, for changes that aren't 1:1 (a thread's replies switched to another style). A post's `ts` in the plan is its key (the app's, or `post-<content hash>`) until it has one. `delete_after_posts=True` makes each delete wait for every post in the plan, across runs; `atomic=True` tells a review page to apply the plan whole.
+
    New text over 4,000 chars is planned as `post` / `edit` send it (`sendable`): beside blocks it becomes the capped fallback, and text-only it goes out as `section` blocks split at line breaks, with that fallback. It's `blocked` only when Slack can't take it: a line over 3,000 chars, or more than 50 sections.
-4. **Apply:** re-reads each message first. If its content no longer matches the planned hash, the action is `stale` and nothing is written. If it already shows the new content, it's `already`. Writes are paced, 1.2 s apart by default. A repost posts the new message before deleting the old one, keeping the old message's metadata and files. With `receipts`, a re-run skips what's done.
+4. **Apply:** re-reads each message first. If its content no longer matches the planned hash, the action is `stale` and nothing is written. If it already shows the new content, it's `already`. Writes are paced, 1.2 s apart by default. A repost posts the new message before deleting the old one, keeping the old message's metadata and files. Likewise every `post` runs before any `delete` (`apply_order`), and a post that fails holds the run's deletes (`pending`, with the reason), so a failure leaves a duplicate, never a loss. With `receipts`, a re-run skips what's done; a real run with posts needs them, so a re-run never posts twice. `report.posted` maps each post's key to its ts.
 
 **Same content** (`noop` when planning, `already` when applying) is compared as Slack stores a message. `&amp;` `&lt;` `&gt;` equal `&` `<` `>`, in the text and in every block string. With blocks, the blocks are what renders, and the text is only the notification fallback, so its runs of whitespace don't count but its words do. Without blocks the text must match. Also ignored: block ids, the size fields Slack adds to an image block, and a mrkdwn text's default `verbatim: false` or a plain_text's default `emoji: true`.
 

@@ -5,8 +5,9 @@ Endpoints:
 - ``GET /``, ``GET /<asset>``: the vendored ``dist/`` (built from the `ts` branch's
   ``src/plan-view/review.tsx``; see ``BUNDLE_PROVENANCE``).
 - ``GET /plan``: ``{"path", "plan"}``, the plan's review form (`Plan.review_json`).
-- ``POST /check``, ``POST /apply``: body ``{"ids": [ts, …]}``; runs `apply` on
-  those actions (a dry run for ``/check``) and returns ``{"outcomes": […]}``.
+- ``POST /check``, ``POST /apply``: body ``{"ids": [id, …]}`` (a message's ts, a
+  post's key); runs `apply` on those actions (a dry run for ``/check``) and
+  returns ``{"outcomes": […], "posted": {key: ts}}``.
 
 Bound to 127.0.0.1. A POST must be ``Content-Type: application/json`` and,
 when the browser sends an ``Origin``, come from this server's own origin, so
@@ -19,7 +20,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Callable
 
-from ..rewrite import Outcome, Plan
+from ..rewrite import Outcome, Plan, Report
 
 # The preview server's 3077, plus one.
 DEFAULT_PORT = 3078
@@ -87,19 +88,19 @@ def make_handler(plan_path: Path, run: Runner, dist_dir: Path = DIST_DIR) -> typ
                 self._json(400, {"error": f"bad request: {e}"})
                 return
             if not isinstance(ids, list) or not all(isinstance(i, str) for i in ids):
-                self._json(400, {"error": "bad request: ids must be a list of ts strings"})
+                self._json(400, {"error": "bad request: ids must be a list of strings"})
                 return
             known = {a.ts for a in plan.actions if a.writes}
             unknown = [i for i in ids if i not in known]
             if unknown:
-                self._json(400, {"error": f"not edits or reposts in this plan: {', '.join(unknown)}"})
+                self._json(400, {"error": f"not writes in this plan: {', '.join(unknown)}"})
                 return
             try:
                 outcomes = run(plan, ids, path == "/check")
             except Exception as e:
                 self._json(500, {"error": f"{type(e).__name__}: {e}"})
                 return
-            self._json(200, {"outcomes": [o.to_json() for o in outcomes]})
+            self._json(200, {"outcomes": [o.to_json() for o in outcomes], "posted": Report(outcomes).posted})
 
     return Handler
 

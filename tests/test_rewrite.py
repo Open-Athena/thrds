@@ -221,7 +221,7 @@ def test_substitute_plans_edits_noops_and_blocks_others(ch):
         blocks=[{"block_id": "s0", "type": "section", "text": {"type": "mrkdwn", "text": ":new: build"}}],
     )
     assert by_ts["2.0"].new == Content(text=":new: two", blocks=None)
-    assert p.counts() == {"edit": 4, "repost": 0, "noop": 1, "skip": 0, "blocked": 2}
+    assert p.counts() == {"edit": 4, "repost": 0, "post": 0, "delete": 0, "noop": 1, "skip": 0, "blocked": 2}
 
 
 # r2's November digest OP (2026-11-23), trimmed: Slack stored the text one line with `&amp;`, the section with
@@ -535,7 +535,7 @@ def test_repost_with_override_on_a_user_token_fails():
 
 
 def test_render_must_return_desired_or_skip(ch):
-    with pytest.raises(TypeError, match=r"render\(4\.0\) returned str, not Desired or Skip"):
+    with pytest.raises(TypeError, match=r"render\(4\.0\) returned str, not Desired, Skip or Delete"):
         plan(find_history(ch), lambda f: "oops")
 
 
@@ -596,7 +596,7 @@ def test_cli_plan_show_apply(cli_ch, tmp_path):
         ["--- 2.1 (now)", "+++ 2.1 (planned)", "@@ -1 +1 @@", "-:old: reply", "+:new: reply"],
         [""],
     ]
-    assert review["counts"] == {"edit": 2, "repost": 0, "noop": 0, "skip": 0, "blocked": 1}
+    assert review["counts"] == {"edit": 2, "repost": 0, "post": 0, "delete": 0, "noop": 0, "skip": 0, "blocked": 1}
 
     r = run("apply", str(out))
     assert r.exit_code == 0

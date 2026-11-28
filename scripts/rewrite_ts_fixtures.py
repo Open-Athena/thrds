@@ -3,8 +3,8 @@
     scripts/rewrite_ts_fixtures.py <ts-checkout>/tests/fixtures
 
 Run by `scripts/sync-rewrite-bundle`. `tests/rewrite-slack.test.ts` (ts) checks its `contentHash` against
-`rewrite-hashes.json`, its `sameContent` against `rewrite-same.json`, and that planning the same fake channel gives
-`rewrite-plan.json`.
+`rewrite-hashes.json`, its `sameContent` against `rewrite-same.json`, that planning the same fake channel gives
+`rewrite-plan.json`, and that switching a thread's replies (deletes, then posts) gives `rewrite-plan-switch.json`.
 """
 import json
 import sys
@@ -12,7 +12,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from tests.test_rewrite import DIGEST, LONG, LONG_IMAGE, LONG_LINE, LONG_SECTIONS, FakeChannel, RICH, SAME_CASES, SECTION  # noqa: E402
-from thrds.rewrite import Content, Desired, Sender, find_history, plan, same_content, substitute  # noqa: E402
+from tests.test_rewrite_post_delete import WEEKS, Refusing, switch, thread  # noqa: E402
+from thrds.rewrite import Content, Desired, Post, Sender, find_history, find_thread, plan, same_content, substitute  # noqa: E402
 
 out = Path(sys.argv[1])
 contents = [
@@ -60,3 +61,11 @@ def render(f):
 p = plan(find_history(ch, include_replies=True, include_foreign=True), render)
 (out / "rewrite-plan.json").write_text(json.dumps(p.to_json(), indent=2, ensure_ascii=False) + "\n")
 print(p.summary())
+
+# A thread switched to other replies: three deletes, a person's reply blocked, two keyed posts, one default-keyed (twice,
+# for the `-2` suffix), one blocked (a line over the section limit).
+same = Desired("Week 3 :soon:")
+posts = [*WEEKS, Post("C1", "1.0", same), Post("C1", "1.0", same, broadcast=True), Post("C1", None, Desired("x" * 3001 + "\n" + "y" * 1000), key="long")]
+switched = plan(find_thread(thread(Refusing()), "1.0", include_foreign=True), switch, posts=posts, delete_after_posts=True, atomic=True)
+(out / "rewrite-plan-switch.json").write_text(json.dumps(switched.to_json(), indent=2, ensure_ascii=False) + "\n")
+print(switched.summary())

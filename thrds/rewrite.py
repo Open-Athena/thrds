@@ -6,17 +6,21 @@ Three steps, the middle one pure (`specs/done/bulk-rewrite.md`):
    scope, as `Found` (wire text, blocks, sender, files, thread position).
    Ownership is the token's bot / user id, never the per-message
    ``username`` (custom senders change that).
-2. **Plan** (`plan(found, render)`): the app's ``render(found) -> Desired |
-   Skip`` re-derives each message; the plan gives each message one action:
-   ``edit``, ``repost`` (the sender changes, which ``chat.update`` can't do),
-   ``noop``, ``skip`` (the app's reason) or ``blocked`` (what Slack can't do).
-   Each action records the message's content hash at planning time.
+2. **Plan** (`plan(found, render, posts=…)`): the app's ``render(found) ->
+   Desired | Skip | Delete`` re-derives each message; the plan gives each
+   message one action: ``edit``, ``repost`` (the sender changes, which
+   ``chat.update`` can't do), ``delete``, ``noop``, ``skip`` (the app's
+   reason) or ``blocked`` (what Slack can't do). New messages (`Post`) are
+   ``post`` actions, keyed by a plan-assigned key until they have a ts. Each
+   action records a content hash at planning time (a post's: its new content).
    `Plan.to_json` / `Plan.from_json` round-trip it for review.
 3. **Apply** (`apply(plan, client)`): dry run unless ``dry_run=False``. Each
    action re-reads its message first and refuses it when the hash moved
    (``stale``); a message already matching the plan's new content is
-   ``already``. Writes are paced, and an optional receipts file (JSONL) makes
-   a re-run skip what's done.
+   ``already``. Every ``post`` runs before any ``delete``, and a failed post
+   holds the deletes (a failure leaves a duplicate, never a loss). Writes are
+   paced, and a receipts file (JSONL) makes a re-run skip what's done; a real
+   run with posts needs one, so a re-run never posts twice.
 
 The text is Slack wire mrkdwn throughout: no markdown conversion, since the
 app renders the wire form itself.
@@ -263,24 +267,56 @@ class Skip:
     reason: str
 
 
-Render = Callable[[Found], "Desired | Skip"]
+@dataclass(frozen=True)
+class Delete:
+    """The app wants this message gone (``reason``: why, for review)."""
+    reason: str | None = None
+
+
+@dataclass(frozen=True)
+class Post:
+    """A new message for the plan to post: ``desired`` into ``channel`` (a reply when ``thread_ts`` is set).
+
+    ``key`` names it until it has a ts (in ``only``, receipts and the report's
+    ``posted``); default ``post-<hash of its content>``, so a re-plan of the
+    same content keeps it. Not ts-shaped, and unique within the plan.
+    """
+    channel: str
+    thread_ts: str | None
+    desired: Desired
+    key: str | None = None
+    broadcast: bool = False
+    metadata: dict | None = None
+
+
+Render = Callable[[Found], "Desired | Skip | Delete"]
 
 
 class Kind(str, Enum):
     EDIT = "edit"
     REPOST = "repost"
+    POST = "post"
+    DELETE = "delete"
     NOOP = "noop"
     SKIP = "skip"
     BLOCKED = "blocked"
 
 
+_WRITES = (Kind.EDIT, Kind.REPOST, Kind.POST, Kind.DELETE)
+
+
 @dataclass(frozen=True)
 class PlannedAction:
+    """One message's action. ``ts`` is the message's, except a ``post``'s: its key (it has no ts until posted).
+
+    ``old`` is ``None`` for a ``post`` (and for a ``blocked`` one); ``new`` is
+    ``None`` for a ``delete``.
+    """
     kind: Kind
     channel: str
     ts: str
     thread_ts: str | None
-    old: Content
+    old: Content | None
     new: Content | None = None
     reason: str | None = None
     broadcast: bool = False
@@ -288,20 +324,27 @@ class PlannedAction:
 
     @property
     def hash(self) -> str:
-        """The message's content hash when planned; apply refuses it once this moves."""
-        return self.old.hash
+        """The message's content hash when planned (a post's: its new content's); apply refuses it once this moves."""
+        c = self.old if self.old is not None else self.new
+        assert c is not None
+        return c.hash
 
     @property
     def writes(self) -> bool:
-        return self.kind in (Kind.EDIT, Kind.REPOST)
+        return self.kind in _WRITES
+
+    @property
+    def is_new(self) -> bool:
+        """A message the plan posts (``post``, or a ``blocked`` one): ``ts`` is its key."""
+        return self.old is None
 
     def diff(self) -> str:
         """Unified diff of the wire text (empty when only blocks or the sender change)."""
-        if self.new is None:
+        if self.new is None and self.kind is not Kind.DELETE:
             return ""
         return "\n".join(unified_diff(
-            self.old.text.split("\n"),
-            self.new.text.split("\n"),
+            [] if self.old is None else self.old.text.split("\n"),
+            [] if self.new is None else self.new.text.split("\n"),
             fromfile=f"{self.ts} (now)",
             tofile=f"{self.ts} (planned)",
             lineterm="",
@@ -314,7 +357,7 @@ class PlannedAction:
             "ts": self.ts,
             "thread_ts": self.thread_ts,
             "hash": self.hash,
-            "old": self.old.to_json(),
+            "old": None if self.old is None else self.old.to_json(),
             "new": None if self.new is None else self.new.to_json(),
             "reason": self.reason,
         }
@@ -331,14 +374,23 @@ class PlannedAction:
             channel=d["channel"],
             ts=d["ts"],
             thread_ts=d.get("thread_ts"),
-            old=Content.from_json(d["old"]),
+            old=None if d.get("old") is None else Content.from_json(d["old"]),
             new=None if d.get("new") is None else Content.from_json(d["new"]),
             reason=d.get("reason"),
             broadcast=d.get("broadcast", False),
             metadata=d.get("metadata"),
         )
+        if action.old is None and action.new is None:
+            raise ValueError(f"plan action {action.ts}: neither old nor new content")
+        if action.kind is Kind.POST and action.old is not None:
+            raise ValueError(f"plan action {action.ts}: a post with old content")
+        if action.kind in (Kind.EDIT, Kind.REPOST, Kind.DELETE) and action.old is None:
+            raise ValueError(f"plan action {action.ts}: {action.kind.value} without old content")
+        if action.kind in (Kind.EDIT, Kind.REPOST, Kind.POST) and action.new is None:
+            raise ValueError(f"plan action {action.ts}: {action.kind.value} without new content")
         if "hash" in d and d["hash"] != action.hash:
-            raise ValueError(f"plan action {action.ts}: recorded hash {d['hash']} doesn't match its old content ({action.hash})")
+            which = "old" if action.old is not None else "new"
+            raise ValueError(f"plan action {action.ts}: recorded hash {d['hash']} doesn't match its {which} content ({action.hash})")
         return action
 
     def format(self, color: bool = True) -> str:
@@ -347,10 +399,22 @@ class PlannedAction:
         header = f"{self.kind.value.upper()} {where}"
         if self.reason is not None:
             header += f": {self.reason}"
+        if self.kind is Kind.POST:
+            assert self.new is not None
+            lines = [header]
+            if self.new.sender.is_override:
+                lines.append(f"  sender: {self.new.sender.describe()}")
+            lines += [f"  {GREEN}+{line}{RESET}" for line in self.new.text.split("\n")]
+            if not _only_rich_text(self.new.blocks):
+                lines.append(f"  {DIM}blocks: {_blocks_summary(self.new.blocks)}{RESET}")
+            return "\n".join(lines)
+        if self.kind is Kind.DELETE:
+            assert self.old is not None
+            return "\n".join([header, *(f"  {RED}-{line}{RESET}" for line in self.old.text.split("\n"))])
         if not self.writes:
             return header
         lines = [header]
-        assert self.new is not None
+        assert self.new is not None and self.old is not None
         if self.new.sender != self.old.sender:
             lines.append(f"  sender: {self.old.sender.describe()} → {self.new.sender.describe()}")
         if self.new.text != self.old.text:
@@ -371,7 +435,16 @@ def _blocks_summary(blocks: list[dict] | None) -> str:
 
 @dataclass
 class Plan:
+    """The actions, plus two flags an app sets (`plan`'s keywords).
+
+    ``delete_after_posts``: a ``delete`` runs only once every ``post`` in the
+    plan is done (this run, or by receipt), also across runs and batches.
+    Without it, a post that fails in a run holds that run's deletes.
+    ``atomic``: review applies the plan whole, never a selection of it.
+    """
     actions: list[PlannedAction]
+    delete_after_posts: bool = False
+    atomic: bool = False
 
     def counts(self) -> dict[str, int]:
         out = {k.value: 0 for k in Kind}
@@ -390,14 +463,25 @@ class Plan:
         return "\n".join(parts)
 
     def to_json(self) -> dict:
-        return {"thrds_rewrite_plan": PLAN_VERSION, "actions": [a.to_json() for a in self.actions]}
+        d: dict = {"thrds_rewrite_plan": PLAN_VERSION}
+        if self.delete_after_posts:
+            d["delete_after_posts"] = True
+        if self.atomic:
+            d["atomic"] = True
+        d["actions"] = [a.to_json() for a in self.actions]
+        return d
 
     @classmethod
     def from_json(cls, d: dict) -> Plan:
         version = d.get("thrds_rewrite_plan")
         if version != PLAN_VERSION:
             raise ValueError(f"not a thrds rewrite plan (version {version!r}, expected {PLAN_VERSION})")
-        return cls(actions=[PlannedAction.from_json(a) for a in d["actions"]])
+        actions = [PlannedAction.from_json(a) for a in d["actions"]]
+        ids = [a.ts for a in actions]
+        dupes = sorted({i for i in ids if ids.count(i) > 1})
+        if dupes:
+            raise ValueError(f"plan actions share ids: {', '.join(dupes)}")
+        return cls(actions, delete_after_posts=d.get("delete_after_posts", False), atomic=d.get("atomic", False))
 
     def review_json(self) -> dict:
         """`to_json` plus, per action, its text ``diff``: the form a review UI reads."""
@@ -430,16 +514,61 @@ def sendable(text: str, blocks: list[dict] | None) -> tuple[str, list[dict] | No
     return fallback_text(text), blocks
 
 
-def plan(found: Iterable[Found], render: Render, *, reorder_ok: bool = False) -> Plan:
-    """One action per found message; pure (no Slack calls).
+_TS = re.compile(r"\d+\.\d+")
+
+
+def _post_actions(posts: Iterable[Post], taken: set[str]) -> list[PlannedAction]:
+    out = []
+    counts: dict[str, int] = {}
+    for p in posts:
+        sender = p.desired.sender or Sender()
+        base = dict(
+            channel=p.channel,
+            thread_ts=p.thread_ts,
+            old=None,
+            broadcast=p.broadcast and p.thread_ts is not None,
+            metadata=p.metadata,
+        )
+        try:
+            text, blocks = sendable(p.desired.text, p.desired.blocks)
+            new = Content(text=text, blocks=blocks, sender=sender)
+            kind, reason = Kind.POST, None
+        except ValueError as e:
+            new = Content(text=p.desired.text, blocks=p.desired.blocks, sender=sender)
+            kind, reason = Kind.BLOCKED, str(e)
+        key = p.key
+        if key is None:
+            stem = f"post-{new.hash}"
+            counts[stem] = counts.get(stem, 0) + 1
+            key = stem if counts[stem] == 1 else f"{stem}-{counts[stem]}"
+        if _TS.fullmatch(key):
+            raise ValueError(f"post key {key!r} looks like a message ts")
+        if key in taken:
+            raise ValueError(f"post key {key!r} is already an id in the plan")
+        taken.add(key)
+        out.append(PlannedAction(kind, ts=key, new=new, reason=reason, **base))
+    return out
+
+
+def plan(
+    found: Iterable[Found],
+    render: Render,
+    *,
+    posts: Iterable[Post] = (),
+    reorder_ok: bool = False,
+    delete_after_posts: bool = False,
+    atomic: bool = False,
+) -> Plan:
+    """One action per found message, then one ``post`` per `Post`; pure (no Slack calls).
 
     A sender change is a ``repost`` (delete + post; ``chat.update`` can't
     change ``username`` / ``icon_*``). It's ``blocked`` when the message has
     replies (they'd orphan), when it isn't the newest in its channel / thread
     (the repost would land at the end; ``reorder_ok`` allows it), and when it
     has files and the new sender is an override (Slack shows no files on
-    those). ``render`` runs only on this app's own posts; others are
-    ``blocked``.
+    those). A `Delete` is ``blocked`` when the message has replies. ``render``
+    runs only on this app's own posts; others are ``blocked``. Posts land in
+    the order given. ``delete_after_posts`` / ``atomic``: see `Plan`.
     """
     actions = []
     for f in found:
@@ -460,8 +589,14 @@ def plan(found: Iterable[Found], render: Render, *, reorder_ok: bool = False) ->
         if isinstance(r, Skip):
             actions.append(PlannedAction(Kind.SKIP, reason=r.reason, **base))
             continue
+        if isinstance(r, Delete):
+            if f.reply_count > 0:
+                actions.append(PlannedAction(Kind.BLOCKED, reason=f"a delete would orphan its {f.reply_count} replies", **base))
+            else:
+                actions.append(PlannedAction(Kind.DELETE, reason=r.reason, **base))
+            continue
         if not isinstance(r, Desired):
-            raise TypeError(f"render({f.ts}) returned {type(r).__name__}, not Desired or Skip")
+            raise TypeError(f"render({f.ts}) returned {type(r).__name__}, not Desired, Skip or Delete")
         sender = f.sender if r.sender is None else r.sender
         try:
             text, blocks = sendable(r.text, r.blocks)
@@ -490,7 +625,8 @@ def plan(found: Iterable[Found], render: Render, *, reorder_ok: bool = False) ->
             actions.append(PlannedAction(Kind.REPOST, new=new, metadata=f.metadata, **base))
         else:
             actions.append(PlannedAction(Kind.BLOCKED, new=new, reason=reason, **base))
-    return Plan(actions)
+    actions += _post_actions(posts, {a.ts for a in actions})
+    return Plan(actions, delete_after_posts=delete_after_posts, atomic=atomic)
 
 
 # --- find ---------------------------------------------------------------
@@ -620,16 +756,17 @@ def find_ids(client: SlackClient, tss: Sequence[str], channel: str | None = None
 class Status(str, Enum):
     DONE = "done"          # written now
     ALREADY = "already"    # the message already shows the new content
-    RECEIPT = "receipt"    # done in an earlier run (receipts file)
-    PENDING = "pending"    # dry run: would write
-    STALE = "stale"        # changed since planning (or a repost would no longer keep its place)
-    GONE = "gone"          # deleted since planning
+    RECEIPT = "receipt"    # done in an earlier run (receipts); a post's carries its ts
+    PENDING = "pending"    # dry run: would write; or a delete held by a post not done (see `error`)
+    STALE = "stale"        # changed since planning (or a repost / delete would no longer be safe)
+    GONE = "gone"          # deleted since planning (a post's: its thread's parent)
     FAILED = "failed"      # Slack refused; see `error`
     UNDELETED = "undeleted"  # repost posted the new message but couldn't delete the old one
 
 
 @dataclass(frozen=True)
 class Outcome:
+    """An action's result; ``ts`` is the action's (a post's key), ``new_ts`` what a post / repost posted."""
     ts: str
     kind: Kind
     status: Status
@@ -648,6 +785,14 @@ class Outcome:
 @dataclass
 class Report:
     outcomes: list[Outcome]
+
+    @property
+    def posted(self) -> dict[str, str]:
+        """Each post's key → its ts, for posts done now or by an earlier run (so the app can record them)."""
+        return {
+            o.ts: o.new_ts for o in self.outcomes
+            if o.kind is Kind.POST and o.new_ts is not None and o.status in (Status.DONE, Status.RECEIPT)
+        }
 
     def counts(self) -> dict[str, int]:
         out: dict[str, int] = {}
@@ -671,15 +816,16 @@ class Report:
         return "\n".join(lines)
 
 
-def _read_receipts(path: Path | None) -> set[str]:
+def _read_receipts(path: Path | None) -> dict[str, str | None]:
+    """The ids ``done`` / ``already`` in the receipts file → the ts each posted (``None`` for an edit / delete)."""
     if path is None or not path.exists():
-        return set()
-    done = set()
+        return {}
+    done: dict[str, str | None] = {}
     for line in path.read_text().splitlines():
         if line.strip():
             r = json.loads(line)
             if r["status"] in (Status.DONE.value, Status.ALREADY.value):
-                done.add(r["ts"])
+                done[r["ts"]] = r.get("new_ts")
     return done
 
 
@@ -689,6 +835,7 @@ def _update_payload(a: PlannedAction) -> dict:
 
 
 def _post_payload(a: PlannedAction) -> dict:
+    """``chat.postMessage`` for a ``post``, or a ``repost``'s new message."""
     assert a.new is not None
     data: dict = {"channel": a.channel, "text": a.new.text, "unfurl_links": False, "unfurl_media": False}
     if a.new.blocks:
@@ -709,7 +856,49 @@ def _post_payload(a: PlannedAction) -> dict:
     return data
 
 
+def _override_on_user_token(client: SlackClient, a: PlannedAction) -> bool:
+    return a.new is not None and a.new.sender.is_override and client.token.startswith("xoxp-")
+
+
+def _apply_post(client: SlackClient, a: PlannedAction, dry_run: bool) -> Outcome:
+    assert a.new is not None
+    if a.thread_ts is not None and read_message(client, a.channel, a.thread_ts) is None:
+        return Outcome(a.ts, a.kind, Status.GONE, error=f"its thread {a.thread_ts} is gone")
+    if _override_on_user_token(client, a):
+        return Outcome(a.ts, a.kind, Status.FAILED, error="a sender override needs a bot token (xoxb-…)")
+    if dry_run:
+        return Outcome(a.ts, a.kind, Status.PENDING)
+    try:
+        posted = client._request("chat.postMessage", _post_payload(a))
+    except SlackApiError as e:
+        return Outcome(a.ts, a.kind, Status.FAILED, error=e.code)
+    return Outcome(a.ts, a.kind, Status.DONE, new_ts=posted["ts"])
+
+
+def _apply_delete(client: SlackClient, a: PlannedAction, dry_run: bool) -> Outcome:
+    m = read_message(client, a.channel, a.ts)
+    if m is None:
+        return Outcome(a.ts, a.kind, Status.GONE)
+    if _content_of(m).hash != a.hash:
+        return Outcome(a.ts, a.kind, Status.STALE, error="changed since planning")
+    if m.get("reply_count", 0) > 0:
+        return Outcome(a.ts, a.kind, Status.STALE, error=f"now has {m['reply_count']} replies")
+    if dry_run:
+        return Outcome(a.ts, a.kind, Status.PENDING)
+    try:
+        client._request("chat.delete", {"channel": a.channel, "ts": a.ts})
+    except SlackApiError as e:
+        if e.code == "message_not_found":
+            return Outcome(a.ts, a.kind, Status.GONE)
+        return Outcome(a.ts, a.kind, Status.FAILED, error=e.code)
+    return Outcome(a.ts, a.kind, Status.DONE)
+
+
 def _apply_one(client: SlackClient, a: PlannedAction, dry_run: bool) -> Outcome:
+    if a.kind is Kind.POST:
+        return _apply_post(client, a, dry_run)
+    if a.kind is Kind.DELETE:
+        return _apply_delete(client, a, dry_run)
     m = read_message(client, a.channel, a.ts)
     if m is None:
         return Outcome(a.ts, a.kind, Status.GONE)
@@ -724,7 +913,7 @@ def _apply_one(client: SlackClient, a: PlannedAction, dry_run: bool) -> Outcome:
             return Outcome(a.ts, a.kind, Status.STALE, error=f"now has {m['reply_count']} replies")
         if not _is_last(client, a.channel, a.ts, a.thread_ts):
             return Outcome(a.ts, a.kind, Status.STALE, error="no longer the newest; a repost would move it")
-        if a.new.sender.is_override and client.token.startswith("xoxp-"):
+        if _override_on_user_token(client, a):
             return Outcome(a.ts, a.kind, Status.FAILED, error="a sender override needs a bot token (xoxb-…)")
     if dry_run:
         return Outcome(a.ts, a.kind, Status.PENDING)
@@ -758,25 +947,36 @@ def apply(
     jitter: float = 0.0,
     on_outcome: Callable[[Outcome], None] | None = None,
 ) -> Report:
-    """Carry out ``p``'s ``edit`` / ``repost`` actions in order (``only``: just these ts).
+    """Carry out ``p``'s writes (``only``: just these ids: a message's ts, a post's key).
 
-    Dry run by default: each action is still checked against its message
-    (``pending`` / ``stale`` / ``gone`` / ``already``), but nothing is written.
-    A repost posts the new message before deleting the old one, so a failed
-    delete leaves a duplicate (``undeleted``), never a loss. With
-    ``receipts`` (a JSONL path), each outcome of a real run is appended, and
-    a re-run skips messages already ``done`` / ``already``.
+    Order: the plan's order, except every ``delete`` runs after every other
+    write (`apply_order`). Dry run by default: each action is still checked
+    against its message (``pending`` / ``stale`` / ``gone`` / ``already``),
+    but nothing is written. A repost posts the new message before deleting
+    the old one, so a failed delete leaves a duplicate (``undeleted``), never
+    a loss; likewise a ``post`` that fails holds the run's deletes (left
+    ``pending``), and with ``p.delete_after_posts`` a delete waits for every
+    post in the plan. With ``receipts`` (a JSONL path), each outcome of a real
+    run is appended, and a re-run skips ids already ``done`` / ``already``; a
+    real run with posts requires it, so a re-run never posts twice.
     """
     selected = None if only is None else set(only)
     receipts_path = None if receipts is None else Path(receipts)
+    todo = [a for a in apply_order(p.actions) if a.writes and (selected is None or a.ts in selected)]
+    if not dry_run and receipts_path is None and any(a.kind is Kind.POST for a in todo):
+        raise ValueError("a real run with posts needs receipts (a re-run would post again)")
     done = _read_receipts(receipts_path)
+    # Posts not done yet: a failure this run, or (with `delete_after_posts`) any post of the plan.
+    unposted = {a.ts for a in p.actions if a.kind is Kind.POST and a.ts not in done} if p.delete_after_posts else set()
+    failed_posts: list[str] = []
     outcomes = []
     wrote = False
-    for a in p.actions:
-        if not a.writes or (selected is not None and a.ts not in selected):
-            continue
+    for a in todo:
         if a.ts in done:
-            o = Outcome(a.ts, a.kind, Status.RECEIPT)
+            o = Outcome(a.ts, a.kind, Status.RECEIPT, new_ts=done[a.ts])
+        elif a.kind is Kind.DELETE and not dry_run and (failed_posts or unposted):
+            waiting = failed_posts or sorted(unposted)
+            o = Outcome(a.ts, a.kind, Status.PENDING, error=f"held: post {', '.join(waiting)} not done")
         else:
             if wrote and pace > 0:
                 time.sleep(pace + random.uniform(0, jitter))
@@ -785,10 +985,25 @@ def apply(
             if receipts_path is not None and not dry_run:
                 with receipts_path.open("a") as fh:
                     fh.write(json.dumps(o.to_json()) + "\n")
+        if a.kind is Kind.POST:
+            if o.status in (Status.DONE, Status.RECEIPT):
+                unposted.discard(a.ts)
+            elif not dry_run:
+                failed_posts.append(a.ts)
         outcomes.append(o)
         if on_outcome is not None:
             on_outcome(o)
     return Report(outcomes)
+
+
+def apply_order(actions: Iterable[PlannedAction]) -> list[PlannedAction]:
+    """``actions`` in the order `apply` runs them: the given order, with every ``delete`` moved after the rest.
+
+    A review page sends its selection in this order (in batches, too), so no
+    delete goes before a post.
+    """
+    actions = list(actions)
+    return [a for a in actions if a.kind is not Kind.DELETE] + [a for a in actions if a.kind is Kind.DELETE]
 
 
 # --- renders ------------------------------------------------------------

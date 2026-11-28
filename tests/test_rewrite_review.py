@@ -48,7 +48,7 @@ def test_serves_the_page_and_the_plan(server):
     assert status == 200
     assert body["path"] == "plan.json"
     assert [(a["ts"], a["kind"]) for a in body["plan"]["actions"]] == [("4.0", "edit"), ("3.0", "noop"), ("2.0", "edit"), ("2.1", "edit"), ("1.0", "edit")]
-    assert body["plan"]["counts"] == {"edit": 4, "repost": 0, "noop": 1, "skip": 0, "blocked": 0}
+    assert body["plan"]["counts"] == {"edit": 4, "repost": 0, "post": 0, "delete": 0, "noop": 1, "skip": 0, "blocked": 0}
     assert request(f"{base}/../pyproject.toml")[0] == 404
 
 
@@ -57,18 +57,18 @@ def test_check_then_apply_selected(server):
     assert request(f"{base}/check", {"ids": ["2.0", "1.0"]}) == (200, {"outcomes": [
         {"ts": "2.0", "kind": "edit", "status": "pending"},
         {"ts": "1.0", "kind": "edit", "status": "pending"},
-    ]})
+    ], "posted": {}})
     assert ch.writes == []
     assert not receipts.exists()
-    assert request(f"{base}/apply", {"ids": ["1.0"]}) == (200, {"outcomes": [{"ts": "1.0", "kind": "edit", "status": "done"}]})
+    assert request(f"{base}/apply", {"ids": ["1.0"]}) == (200, {"outcomes": [{"ts": "1.0", "kind": "edit", "status": "done"}], "posted": {}})
     assert ch.writes == [("chat.update", {"channel": "C1", "ts": "1.0", "text": ":new: one", "blocks": []})]
     assert [json.loads(line) for line in receipts.read_text().splitlines()] == [{"ts": "1.0", "kind": "edit", "status": "done"}]
 
 
 def test_rejects_bad_requests(server):
     base, ch, _ = server
-    assert request(f"{base}/apply", {"ids": ["3.0", "9.0"]}) == (400, {"error": "not edits or reposts in this plan: 3.0, 9.0"})
-    assert request(f"{base}/apply", {"ids": "1.0"}) == (400, {"error": "bad request: ids must be a list of ts strings"})
+    assert request(f"{base}/apply", {"ids": ["3.0", "9.0"]}) == (400, {"error": "not writes in this plan: 3.0, 9.0"})
+    assert request(f"{base}/apply", {"ids": "1.0"}) == (400, {"error": "bad request: ids must be a list of strings"})
     assert request(f"{base}/apply", {"ids": ["1.0"]}, {"Content-Type": "text/plain"}) == (415, {"error": "expected Content-Type: application/json"})
     assert request(f"{base}/apply", {"ids": ["1.0"]}, {"Origin": "https://evil.example"}) == (403, {"error": "cross-origin request from https://evil.example"})
     assert request(f"{base}/nope", {"ids": []}) == (404, {"error": "not found: /nope"})
