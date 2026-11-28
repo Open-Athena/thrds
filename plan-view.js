@@ -1,11 +1,13 @@
 import {
   REWRITE_KINDS,
+  applyOrder,
   describeSender,
   lineDiff,
   planCounts,
   senderChanged,
-  writes
-} from "./chunk-7J5RH2VN.js";
+  writes,
+  writesSummary
+} from "./chunk-STZYHR2L.js";
 
 // src/plan-view/index.tsx
 import { useMemo, useState } from "react";
@@ -304,6 +306,8 @@ var PLAN_VIEW_CSS = `
   --tpv-del-fg: #a40e26;
   --tpv-edit: #1264a3;
   --tpv-repost: #8a4baf;
+  --tpv-post: #2b7a3d;
+  --tpv-delete: #a33b12;
   --tpv-noop: #8d8d8d;
   --tpv-skip: #b07d00;
   --tpv-blocked: #c22a3a;
@@ -326,6 +330,8 @@ var PLAN_VIEW_CSS = `
     --tpv-del-fg: #f08b97;
     --tpv-edit: #4fa3e3;
     --tpv-repost: #c08ae0;
+    --tpv-post: #6cc985;
+    --tpv-delete: #ee8a5c;
     --tpv-noop: #8d8d8d;
     --tpv-skip: #e0b23c;
     --tpv-blocked: #f0707d;
@@ -345,6 +351,8 @@ var PLAN_VIEW_CSS = `
   --tpv-del-fg: #f08b97;
   --tpv-edit: #4fa3e3;
   --tpv-repost: #c08ae0;
+  --tpv-post: #6cc985;
+  --tpv-delete: #ee8a5c;
   --tpv-noop: #8d8d8d;
   --tpv-skip: #e0b23c;
   --tpv-blocked: #f0707d;
@@ -375,6 +383,8 @@ var PLAN_VIEW_CSS = `
 .tpv-badge { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 8px; border-radius: 4px; border: 1px solid currentColor; }
 .tpv-kind-edit { color: var(--tpv-edit); }
 .tpv-kind-repost { color: var(--tpv-repost); }
+.tpv-kind-post { color: var(--tpv-post); }
+.tpv-kind-delete { color: var(--tpv-delete); }
 .tpv-kind-noop { color: var(--tpv-noop); }
 .tpv-kind-skip { color: var(--tpv-skip); }
 .tpv-kind-blocked { color: var(--tpv-blocked); }
@@ -386,6 +396,8 @@ var PLAN_VIEW_CSS = `
 .tpv-modes { margin-left: auto; display: inline-flex; gap: 6px; }
 .tpv-sender-change { font-size: 13px; margin-bottom: 8px; color: var(--tpv-repost); }
 .tpv-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.tpv-struck { opacity: 0.6; text-decoration: line-through; }
+.tpv-summary { font-weight: 600; }
 .tpv-side, .tpv-single { min-width: 0; background: var(--tpv-panel); border-radius: 6px; padding: 8px 10px; }
 .tpv-diff { margin: 0; padding: 8px 10px; background: var(--tpv-panel); border-radius: 6px; overflow-x: auto; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tpv-add { display: block; background: var(--tpv-add-bg); color: var(--tpv-add-fg); }
@@ -422,12 +434,13 @@ img.tpv-emoji { width: 1.3em; height: 1.3em; vertical-align: -0.3em; }
 `;
 
 // src/plan-view/index.tsx
-import { jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
-var DEFAULT_KINDS = ["edit", "repost", "skip", "blocked"];
+import { Fragment as Fragment2, jsx as jsx2, jsxs as jsxs2 } from "react/jsx-runtime";
+var DEFAULT_KINDS = ["edit", "repost", "post", "delete", "skip", "blocked"];
+var OPTIONAL_KINDS = /* @__PURE__ */ new Set(["post", "delete"]);
 function matches(a, query) {
   if (query === "") return true;
   const q = query.toLowerCase();
-  return [a.ts, a.thread_ts ?? "", a.reason ?? "", a.old.text, a.new?.text ?? ""].some((s) => s.toLowerCase().includes(q));
+  return [a.ts, a.thread_ts ?? "", a.reason ?? "", a.old?.text ?? "", a.new?.text ?? ""].some((s) => s.toLowerCase().includes(q));
 }
 function PlanView({
   plan,
@@ -447,10 +460,14 @@ function PlanView({
   const [confirming, setConfirming] = useState(false);
   const [busy, setBusy] = useState(null);
   const [error, setError] = useState(null);
+  const atomic = plan.atomic === true;
   const shown = plan.actions.filter((a) => kinds.has(a.kind) && matches(a, query));
   const shownWrites = shown.filter(writes);
-  const chosen = plan.actions.filter((a) => writes(a) && selected.has(a.ts));
+  const allWrites = plan.actions.filter(writes);
+  const chosen = applyOrder(atomic ? allWrites : allWrites.filter((a) => selected.has(a.ts)));
+  const chosenDeletes = chosen.filter((a) => a.kind === "delete").length;
   const interactive = onApply !== void 0 || onCheck !== void 0;
+  const summary = writesSummary(counts);
   const toggleKind = (k) => setKinds((prev) => {
     const next = new Set(prev);
     if (next.has(k)) next.delete(k);
@@ -486,7 +503,8 @@ function PlanView({
   return /* @__PURE__ */ jsxs2("div", { className: "tpv", children: [
     !unstyled && /* @__PURE__ */ jsx2("style", { children: PLAN_VIEW_CSS }),
     /* @__PURE__ */ jsxs2("div", { className: "tpv-toolbar", children: [
-      /* @__PURE__ */ jsx2("div", { className: "tpv-kinds", role: "group", "aria-label": "Filter by kind", children: REWRITE_KINDS.map((k) => /* @__PURE__ */ jsxs2(
+      summary !== "" && /* @__PURE__ */ jsx2("span", { className: "tpv-summary", children: summary }),
+      /* @__PURE__ */ jsx2("div", { className: "tpv-kinds", role: "group", "aria-label": "Filter by kind", children: REWRITE_KINDS.filter((k) => !OPTIONAL_KINDS.has(k) || counts[k] > 0).map((k) => /* @__PURE__ */ jsxs2(
         "button",
         {
           type: "button",
@@ -513,14 +531,20 @@ function PlanView({
       )
     ] }),
     interactive && /* @__PURE__ */ jsxs2("div", { className: "tpv-applybar", children: [
-      /* @__PURE__ */ jsxs2("span", { children: [
-        chosen.length,
-        " of ",
-        counts.edit + counts.repost,
-        " selected"
+      atomic ? /* @__PURE__ */ jsxs2("span", { children: [
+        "All ",
+        allWrites.length,
+        ": this plan applies as a whole"
+      ] }) : /* @__PURE__ */ jsxs2(Fragment2, { children: [
+        /* @__PURE__ */ jsxs2("span", { children: [
+          chosen.length,
+          " of ",
+          allWrites.length,
+          " selected"
+        ] }),
+        /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", onClick: () => setAllShown(true), disabled: shownWrites.length === 0, children: "Select shown" }),
+        /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", onClick: () => setAllShown(false), disabled: shownWrites.length === 0, children: "Clear shown" })
       ] }),
-      /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", onClick: () => setAllShown(true), disabled: shownWrites.length === 0, children: "Select shown" }),
-      /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", onClick: () => setAllShown(false), disabled: shownWrites.length === 0, children: "Clear shown" }),
       /* @__PURE__ */ jsx2("span", { className: "tpv-spacer" }),
       onCheck !== void 0 && /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-btn", disabled: chosen.length === 0 || busy !== null, onClick: () => run("check", onCheck), children: busy === "check" ? "Checking\u2026" : "Check" }),
       onApply !== void 0 && (confirming ? /* @__PURE__ */ jsxs2("span", { className: "tpv-confirm", children: [
@@ -529,6 +553,7 @@ function PlanView({
         " message",
         chosen.length === 1 ? "" : "s",
         " to Slack?",
+        chosenDeletes > 0 && ` ${chosenDeletes} delete${chosenDeletes === 1 ? "" : "s"} can't be undone.`,
         /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-btn tpv-primary", disabled: busy !== null, onClick: () => run("apply", onApply), children: busy === "apply" ? "Applying\u2026" : "Apply" }),
         /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-btn", disabled: busy !== null, onClick: () => setConfirming(false), children: "Cancel" })
       ] }) : /* @__PURE__ */ jsxs2("button", { type: "button", className: "tpv-btn tpv-primary", disabled: chosen.length === 0 || busy !== null, onClick: () => setConfirming(true), children: [
@@ -543,7 +568,7 @@ function PlanView({
       {
         action: a,
         outcome: outcomes[a.ts],
-        selectable: interactive && writes(a),
+        selectable: interactive && !atomic && writes(a),
         selected: selected.has(a.ts),
         onToggle: () => toggle(a.ts),
         renderContent,
@@ -573,18 +598,21 @@ function ActionRow({ action: a, outcome, selectable, selected, onToggle, renderC
         outcome.new_ts !== void 0 ? ` \u2192 ${outcome.new_ts}` : "",
         outcome.error !== void 0 ? `: ${outcome.error}` : ""
       ] }),
-      a.new !== null && writes(a) && /* @__PURE__ */ jsxs2("span", { className: "tpv-modes", children: [
+      a.old !== null && a.new !== null && writes(a) && /* @__PURE__ */ jsxs2("span", { className: "tpv-modes", children: [
         /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", "aria-pressed": mode === "rendered", onClick: () => setMode("rendered"), children: "Rendered" }),
         /* @__PURE__ */ jsx2("button", { type: "button", className: "tpv-link", "aria-pressed": mode === "diff", onClick: () => setMode("diff"), children: "Diff" })
       ] })
     ] }),
-    senderChanged(a) && a.new !== null && /* @__PURE__ */ jsxs2("div", { className: "tpv-sender-change", children: [
+    senderChanged(a) && a.new !== null && a.old !== null && /* @__PURE__ */ jsxs2("div", { className: "tpv-sender-change", children: [
       "Sender: ",
       describeSender(a.old.sender),
       " \u2192 ",
       describeSender(a.new.sender)
     ] }),
-    a.new === null || !writes(a) ? /* @__PURE__ */ jsx2("div", { className: "tpv-single", children: render(a.old, "old") }) : mode === "diff" ? /* @__PURE__ */ jsx2(Diff, { from: a.old.text, to: a.new.text }) : /* @__PURE__ */ jsxs2("div", { className: "tpv-sides", children: [
+    a.old === null ? /* @__PURE__ */ jsxs2("div", { className: "tpv-single", children: [
+      /* @__PURE__ */ jsx2("div", { className: "tpv-side-label", children: "New" }),
+      render(a.new, "new")
+    ] }) : a.kind === "delete" ? /* @__PURE__ */ jsx2("div", { className: "tpv-single tpv-struck", children: render(a.old, "old") }) : a.new === null || !writes(a) ? /* @__PURE__ */ jsx2("div", { className: "tpv-single", children: render(a.old, "old") }) : mode === "diff" ? /* @__PURE__ */ jsx2(Diff, { from: a.old.text, to: a.new.text }) : /* @__PURE__ */ jsxs2("div", { className: "tpv-sides", children: [
       /* @__PURE__ */ jsxs2("div", { className: "tpv-side", children: [
         /* @__PURE__ */ jsx2("div", { className: "tpv-side-label", children: "Now" }),
         render(a.old, "old")

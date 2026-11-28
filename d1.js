@@ -116,8 +116,8 @@ function d1Receipts(db, plan, options = {}) {
   const now = options.now ?? nowS;
   return {
     async done() {
-      const row = await db.prepare(`SELECT group_concat(ts, ' ') AS tss FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`).bind(plan).first();
-      return new Set(row?.tss ? row.tss.split(" ") : []);
+      const row = await db.prepare(`SELECT json_group_array(json_array(ts, new_ts)) AS rows FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`).bind(plan).first();
+      return new Map(JSON.parse(row?.rows ?? "[]"));
     },
     async record(o) {
       await db.prepare(`INSERT INTO ${t} (plan, ts, kind, status, new_ts, error, at) VALUES (?, ?, ?, ?, ?, ?, ?)`).bind(plan, o.ts, o.kind, o.status, o.new_ts ?? null, o.error ?? null, now()).run();

@@ -1,6 +1,6 @@
 // src/rewrite.ts
 var PLAN_VERSION = 1;
-var REWRITE_KINDS = ["edit", "repost", "noop", "skip", "blocked"];
+var REWRITE_KINDS = ["edit", "repost", "post", "delete", "noop", "skip", "blocked"];
 var REWRITE_STATUSES = ["done", "already", "receipt", "pending", "stale", "gone", "failed", "undeleted"];
 function parsePlan(json) {
   if (typeof json !== "object" || json === null) throw new Error("not a thrds rewrite plan (not an object)");
@@ -9,19 +9,48 @@ function parsePlan(json) {
     throw new Error(`not a thrds rewrite plan (version ${JSON.stringify(plan.thrds_rewrite_plan)}, expected ${PLAN_VERSION})`);
   }
   if (!Array.isArray(plan.actions)) throw new Error("not a thrds rewrite plan (no actions)");
+  const seen = /* @__PURE__ */ new Set();
+  const dupes = /* @__PURE__ */ new Set();
   for (const a of plan.actions) {
     if (!REWRITE_KINDS.includes(a.kind)) throw new Error(`plan action ${a.ts}: unknown kind ${JSON.stringify(a.kind)}`);
-    if (writes(a) && a.new === null) throw new Error(`plan action ${a.ts}: ${a.kind} without new content`);
+    const old = a.old ?? null;
+    const next = a.new ?? null;
+    if (old === null && next === null) throw new Error(`plan action ${a.ts}: neither old nor new content`);
+    if (a.kind === "post" && old !== null) throw new Error(`plan action ${a.ts}: a post with old content`);
+    if ((a.kind === "edit" || a.kind === "repost" || a.kind === "delete") && old === null) {
+      throw new Error(`plan action ${a.ts}: ${a.kind} without old content`);
+    }
+    if ((a.kind === "edit" || a.kind === "repost" || a.kind === "post") && next === null) {
+      throw new Error(`plan action ${a.ts}: ${a.kind} without new content`);
+    }
+    if (seen.has(a.ts)) dupes.add(a.ts);
+    seen.add(a.ts);
   }
+  if (dupes.size > 0) throw new Error(`plan actions share ids: ${[...dupes].sort().join(", ")}`);
   return plan;
 }
-var writes = (a) => a.kind === "edit" || a.kind === "repost";
+var writes = (a) => a.kind === "edit" || a.kind === "repost" || a.kind === "post" || a.kind === "delete";
+var applyOrder = (actions) => {
+  const all = [...actions];
+  return [...all.filter((a) => a.kind !== "delete"), ...all.filter((a) => a.kind === "delete")];
+};
+function postedOf(outcomes) {
+  const out = {};
+  for (const o of outcomes) {
+    if (o.kind === "post" && o.new_ts !== void 0 && (o.status === "done" || o.status === "receipt")) out[o.ts] = o.new_ts;
+  }
+  return out;
+}
+var TO_DO = { edit: "to edit", repost: "to repost", post: "to post", delete: "to delete" };
+function writesSummary(counts) {
+  return REWRITE_KINDS.filter((k) => TO_DO[k] !== void 0 && counts[k] > 0).map((k) => `${counts[k]} ${TO_DO[k]}`).join(" \xB7 ");
+}
 function planCounts(plan) {
   const out = Object.fromEntries(REWRITE_KINDS.map((k) => [k, 0]));
   for (const a of plan.actions) out[a.kind] += 1;
   return out;
 }
-var senderChanged = (a) => a.new !== null && (a.new.sender.username !== a.old.sender.username || a.new.sender.icon_url !== a.old.sender.icon_url || a.new.sender.icon_emoji !== a.old.sender.icon_emoji);
+var senderChanged = (a) => a.new !== null && a.old !== null && (a.new.sender.username !== a.old.sender.username || a.new.sender.icon_url !== a.old.sender.icon_url || a.new.sender.icon_emoji !== a.old.sender.icon_emoji);
 function describeSender(s) {
   const parts = [s.username === null ? null : `"${s.username}"`, s.icon_emoji, s.icon_url].filter((p) => p !== null);
   return parts.length ? parts.join(" ") : "the app";
@@ -135,11 +164,12 @@ function foundOf(m, channel, ids, last) {
 }
 var POST_SUBTYPES = [null, "bot_message", "thread_broadcast"];
 var isOverride = (s) => s.username !== null || s.icon_url !== null || s.icon_emoji !== null;
+var hashedContent = (a) => a.old ?? a.new;
 async function verifyPlan(json) {
   const p = parsePlan(json);
   for (const a of p.actions) {
-    const h = await contentHash(a.old);
-    if (a.hash !== h) throw new Error(`plan action ${a.ts}: recorded hash ${a.hash} doesn't match its old content (${h})`);
+    const h = await contentHash(hashedContent(a));
+    if (a.hash !== h) throw new Error(`plan action ${a.ts}: recorded hash ${a.hash} doesn't match its ${a.old === null ? "new" : "old"} content (${h})`);
   }
   return p;
 }
@@ -148,7 +178,7 @@ function memoryReceipts(initial = []) {
   return {
     outcomes,
     async done() {
-      return new Set(outcomes.filter((o) => o.status === "done" || o.status === "already").map((o) => o.ts));
+      return new Map(outcomes.filter((o) => o.status === "done" || o.status === "already").map((o) => [o.ts, o.new_ts ?? null]));
     },
     async record(o) {
       outcomes.push(o);
@@ -204,6 +234,9 @@ export {
   REWRITE_STATUSES,
   parsePlan,
   writes,
+  applyOrder,
+  postedOf,
+  writesSummary,
   planCounts,
   senderChanged,
   describeSender,
@@ -224,4 +257,4 @@ export {
   DEFAULT_BATCH,
   postRewrite
 };
-//# sourceMappingURL=chunk-7J5RH2VN.js.map
+//# sourceMappingURL=chunk-STZYHR2L.js.map

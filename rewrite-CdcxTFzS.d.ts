@@ -172,19 +172,21 @@ declare const rich: {
  * plan either side writes, the other applies.
  *
  * 1. **Find** (`findHistory` / `findThread` / `findIds`): the messages in scope, as `RewriteFound`.
- * 2. **Plan** (`plan(found, render)`): the app's `render(found) -> Desired | Skip` re-derives each message; one action
- *    per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `noop`, `skip` (the app's
- *    reason) or `blocked` (what Slack can't do), each recording the message's content hash.
+ * 2. **Plan** (`plan(found, render, {posts})`): the app's `render(found) -> Desired | Skip | Delete` re-derives each
+ *    message; one action per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `delete`,
+ *    `noop`, `skip` (the app's reason) or `blocked` (what Slack can't do), each recording the message's content hash.
+ *    New messages are `post` actions, keyed by a plan-assigned key (in `ts`) until they have a ts.
  * 3. **Apply** (`apply(plan, client)`): a dry run unless `dryRun: false`; each action re-reads its message and refuses
- *    it once its hash moved (`stale`). Writes are paced; `receipts` (`memoryReceipts`, `/d1`'s `d1Receipts`) make a
- *    re-run skip what's done.
+ *    it once its hash moved (`stale`). Every `post` runs before any `delete`, and a failed post holds the deletes.
+ *    Writes are paced; `receipts` (`memoryReceipts`, `/d1`'s `d1Receipts`) make a re-run skip what's done, and a real
+ *    run with posts needs them, so a re-run never posts twice.
  *
  * This module is the browser-safe half (types, content hashing, `substitute`, `postRewrite`); the Slack half (find,
  * `plan`, `apply`, `rewriteHandler`) is `./rewrite-slack`, so a page bundling `PlanView` doesn't pull in the client.
  */
 
 declare const PLAN_VERSION = 1;
-declare const REWRITE_KINDS: readonly ["edit", "repost", "noop", "skip", "blocked"];
+declare const REWRITE_KINDS: readonly ["edit", "repost", "post", "delete", "noop", "skip", "blocked"];
 type RewriteKind = (typeof REWRITE_KINDS)[number];
 interface RewriteSender {
     username: string | null;
@@ -201,12 +203,15 @@ interface RewriteContent {
 interface PlannedAction {
     kind: RewriteKind;
     channel: string;
+    /** The message's ts; a `post`'s key (it has no ts until posted). */
     ts: string;
     /** The parent's ts for a reply; `null` for a top-level message. */
     thread_ts: string | null;
-    /** The message's content hash when planned; apply refuses the action once it moves. */
+    /** The message's content hash when planned (a post's: its new content's); apply refuses the action once it moves. */
     hash: string;
-    old: RewriteContent;
+    /** `null` for a `post` (and a blocked one). */
+    old: RewriteContent | null;
+    /** `null` for a `delete`. */
     new: RewriteContent | null;
     reason: string | null;
     broadcast?: boolean;
@@ -216,13 +221,19 @@ interface PlannedAction {
 }
 interface RewritePlan {
     thrds_rewrite_plan: typeof PLAN_VERSION;
+    /** A `delete` runs only once every `post` in the plan is done (this run, or by receipt), across runs and batches.
+     *  Without it, a post that fails in a run holds that run's deletes. */
+    delete_after_posts?: boolean;
+    /** Review applies the plan whole, never a selection of it. */
+    atomic?: boolean;
     actions: PlannedAction[];
     /** Per-kind counts (review form only). */
     counts?: Record<RewriteKind, number>;
 }
 declare const REWRITE_STATUSES: readonly ["done", "already", "receipt", "pending", "stale", "gone", "failed", "undeleted"];
 type RewriteStatus = (typeof REWRITE_STATUSES)[number];
-/** One applied (or dry-run) action's result. */
+/** One applied (or dry-run) action's result: `ts` is the action's (a post's key), `new_ts` what a post / repost
+ *  posted. A real run's `pending` is a delete held by a post not done (see `error`). */
 interface RewriteOutcome {
     ts: string;
     kind: RewriteKind;
@@ -232,8 +243,15 @@ interface RewriteOutcome {
 }
 /** Validates a parsed plan's version and shape; throws on anything else. */
 declare function parsePlan(json: unknown): RewritePlan;
-/** `edit` and `repost` write; the other kinds don't. */
+/** `edit`, `repost`, `post` and `delete` write; the other kinds don't. */
 declare const writes: (a: Pick<PlannedAction, "kind">) => boolean;
+/** `actions` in the order `apply` runs them: the given order, with every `delete` moved after the rest. A review page
+ *  sends its selection in this order (in batches, too), so no delete goes before a post. */
+declare const applyOrder: <A extends Pick<PlannedAction, "kind">>(actions: Iterable<A>) => A[];
+/** Each post's key → its ts, for posts done now or by an earlier run (so the app can record them). */
+declare function postedOf(outcomes: Iterable<RewriteOutcome>): Record<string, string>;
+/** The writes' counts, as a review header reads them: "3 to edit · 5 to post · 27 to delete" (`""` for none). */
+declare function writesSummary(counts: Record<RewriteKind, number>): string;
 declare function planCounts(plan: RewritePlan): Record<RewriteKind, number>;
 declare const senderChanged: (a: PlannedAction) => boolean;
 declare function describeSender(s: RewriteSender): string;
@@ -289,13 +307,30 @@ interface Desired {
 interface Skip {
     skip: string;
 }
-type Render = (found: RewriteFound) => Desired | Skip | Promise<Desired | Skip>;
-/** `parsePlan`, then each action's recorded hash checked against its old content (as Python's `Plan.from_json`). */
+/** The app wants this message gone (`reason`: why, for review). */
+interface Delete {
+    delete: true;
+    reason?: string | null;
+}
+type Render = (found: RewriteFound) => Desired | Skip | Delete | Promise<Desired | Skip | Delete>;
+/** A new message for the plan to post: `desired` into `channel` (a reply when `threadTs` is set). `key` names it until
+ *  it has a ts (in `only`, receipts and `postedOf`); default `post-<hash of its content>` (`-2`, `-3`… for repeats), so
+ *  a re-plan of the same content keeps it. Not ts-shaped, and unique within the plan. Python's `Post`. */
+interface RewritePost {
+    channel: string;
+    threadTs: string | null;
+    desired: Desired;
+    key?: string;
+    broadcast?: boolean;
+    metadata?: unknown;
+}
+/** `parsePlan`, then each action's recorded hash checked against its old content (a post's: its new content), as
+ *  Python's `Plan.from_json`. */
 declare function verifyPlan(json: unknown): Promise<RewritePlan>;
 /** Where outcomes of real runs go, so a re-run skips what's `done` / `already`. */
 interface RewriteReceipts {
-    /** The ts already `done` or `already`. */
-    done(): Promise<Set<string>>;
+    /** The ids (a message's ts, a post's key) already `done` or `already` → the ts each posted (`null`: none). */
+    done(): Promise<Map<string, string | null>>;
     record(o: RewriteOutcome): Promise<void>;
 }
 /** Receipts in memory (tests, one-request runs). */
@@ -311,13 +346,14 @@ declare const DEFAULT_PACE_MS = 1200;
  * element named `x` becomes `y` when `:x:` maps to `:y:`.
  */
 declare function substitute(mapping: Record<string, string>): Render;
-/** How many actions one `check` / `apply` request takes: each is 2–5 Slack calls, and a Worker request has a
+/** How many actions one `check` / `apply` request takes (posts and deletes count): each is 1–5 Slack calls, and a Worker request has a
  *  subrequest cap (50 free, 1000 paid). `postRewrite` batches to it. */
 declare const DEFAULT_BATCH = 10;
 /**
  * The page's side of `rewriteHandler` (or `slck rewrite review`): POST `ids` to `endpoint` (`…/check` or `…/apply`)
  * `batch` at a time, in order, calling `onOutcomes` after each batch; resolves to every outcome. Throws on the first
- * refused batch (what was applied before it stays applied, and its receipts say so).
+ * refused batch (what was applied before it stays applied, and its receipts say so). Pass the ids in `applyOrder`, so
+ * no batch of deletes goes before a batch with posts.
  */
 declare function postRewrite(endpoint: string, ids: readonly string[], options?: {
     batch?: number;
@@ -325,4 +361,4 @@ declare function postRewrite(endpoint: string, ids: readonly string[], options?:
     onOutcomes?: (os: RewriteOutcome[]) => void;
 }): Promise<RewriteOutcome[]>;
 
-export { pyJsonDumps as $, decodePrivateMetadata as A, type Block as B, describeSender as C, DEFAULT_BATCH as D, divider as E, encodePrivateMetadata as F, escape as G, fitsPrivateMetadata as H, header as I, image as J, imageElement as K, input as L, lineDiff as M, link as N, memoryReceipts as O, PLAN_VERSION as P, mention as Q, REWRITE_KINDS as R, type Skip as S, modal as T, mrkdwnText as U, option as V, parsePlan as W, plainText as X, plainTextInput as Y, planCounts as Z, postRewrite as _, type ButtonOptions as a, rich as a0, sameContent as a1, section as a2, senderChanged as a3, senderOf as a4, staticSelect as a5, substitute as a6, usersSelect as a7, verifyPlan as a8, versionedUrl as a9, withoutImages as aa, writes as ab, DEFAULT_PACE_MS as b, type Desired as c, type DiffLine as d, PRIVATE_METADATA_MAX as e, type PlannedAction as f, REWRITE_STATUSES as g, type RawSlackMessage as h, type Render as i, type RewriteContent as j, type RewriteFound as k, type RewriteKind as l, type RewriteOutcome as m, type RewritePlan as n, type RewriteReceipts as o, type RewriteSender as p, type RewriteStatus as q, type RichStyle as r, actions as s, bound as t, button as u, contentHash as v, contentOf as w, context as x, date as y, datePicker as z };
+export { plainTextInput as $, context as A, type Block as B, date as C, DEFAULT_BATCH as D, datePicker as E, decodePrivateMetadata as F, describeSender as G, divider as H, encodePrivateMetadata as I, escape as J, fitsPrivateMetadata as K, header as L, image as M, imageElement as N, input as O, PLAN_VERSION as P, lineDiff as Q, REWRITE_KINDS as R, type Skip as S, link as T, memoryReceipts as U, mention as V, modal as W, mrkdwnText as X, option as Y, parsePlan as Z, plainText as _, type ButtonOptions as a, planCounts as a0, postRewrite as a1, postedOf as a2, pyJsonDumps as a3, rich as a4, sameContent as a5, section as a6, senderChanged as a7, senderOf as a8, staticSelect as a9, substitute as aa, usersSelect as ab, verifyPlan as ac, versionedUrl as ad, withoutImages as ae, writes as af, writesSummary as ag, DEFAULT_PACE_MS as b, type Delete as c, type Desired as d, type DiffLine as e, PRIVATE_METADATA_MAX as f, type PlannedAction as g, REWRITE_STATUSES as h, type RawSlackMessage as i, type Render as j, type RewriteContent as k, type RewriteFound as l, type RewriteKind as m, type RewriteOutcome as n, type RewritePlan as o, type RewritePost as p, type RewriteReceipts as q, type RewriteSender as r, type RewriteStatus as s, type RichStyle as t, actions as u, applyOrder as v, bound as w, button as x, contentHash as y, contentOf as z };

@@ -1,5 +1,5 @@
 import { AvatarStore } from './avatar.js';
-import { o as RewriteReceipts } from './rewrite-CcsNOGJR.js';
+import { q as RewriteReceipts } from './rewrite-CdcxTFzS.js';
 import { j as SlotStore } from './slots-BakJ4fdg.js';
 import './core-BNb_OG-w.js';
 import './slack-CBVpZ3hd.js';
@@ -57,8 +57,8 @@ interface SqliteLike {
 declare function sqliteD1(db: SqliteLike): D1Like;
 /**
  * A bulk rewrite's receipts in D1, keyed by `plan` (any id naming the plan: its storage key, or a hash of it): each
- * real outcome is a row, and `done()` is the ts already `done` / `already`, so a re-run (or the next batch's request)
- * skips them.
+ * real outcome is a row (`ts`: the action's id, a post's key), and `done()` is the ids already `done` / `already` with
+ * any ts they posted, so a re-run (or the next batch's request) skips them.
  */
 declare function d1Receipts(db: D1Like, plan: string, options?: {
     table?: string;

@@ -59,6 +59,7 @@ import {
   POST_SUBTYPES,
   REWRITE_KINDS,
   REWRITE_STATUSES,
+  applyOrder,
   contentHash,
   contentOf,
   describeSender,
@@ -69,6 +70,7 @@ import {
   parsePlan,
   planCounts,
   postRewrite,
+  postedOf,
   pyJsonDumps,
   sameContent,
   sameSender,
@@ -76,8 +78,9 @@ import {
   senderOf,
   substitute,
   verifyPlan,
-  writes
-} from "./chunk-7J5RH2VN.js";
+  writes,
+  writesSummary
+} from "./chunk-STZYHR2L.js";
 
 // src/mrkdwn.ts
 var escape = (text) => text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
@@ -884,6 +887,41 @@ async function findIds(client, tss, options = {}) {
   }
   return out;
 }
+var NO_SENDER = { username: null, icon_url: null, icon_emoji: null };
+var TS_SHAPED = /^\d+\.\d+$/;
+async function postActions(posts, taken) {
+  const out = [];
+  const counts = /* @__PURE__ */ new Map();
+  for (const p of posts) {
+    const sender = p.desired.sender ?? { ...NO_SENDER };
+    let kind = "post";
+    let reason = null;
+    let next;
+    try {
+      next = { ...sendable(p.desired.text, p.desired.blocks ?? null), sender, files: [] };
+    } catch (e) {
+      next = { text: p.desired.text, blocks: p.desired.blocks ?? null, sender, files: [] };
+      kind = "blocked";
+      reason = e.message;
+    }
+    const hash = await contentHash(next);
+    let key = p.key;
+    if (key === void 0) {
+      const stem = `post-${hash}`;
+      const n = (counts.get(stem) ?? 0) + 1;
+      counts.set(stem, n);
+      key = n === 1 ? stem : `${stem}-${n}`;
+    }
+    if (TS_SHAPED.test(key)) throw new Error(`post key '${key}' looks like a message ts`);
+    if (taken.has(key)) throw new Error(`post key '${key}' is already an id in the plan`);
+    taken.add(key);
+    const a = { kind, channel: p.channel, ts: key, thread_ts: p.threadTs, hash, old: null, new: next, reason };
+    if (p.broadcast && p.threadTs !== null) a.broadcast = true;
+    if (p.metadata !== void 0 && p.metadata !== null) a.metadata = p.metadata;
+    out.push(a);
+  }
+  return out;
+}
 async function plan(found, render, options = {}) {
   const actions2 = [];
   for (const f of found) {
@@ -916,6 +954,11 @@ async function plan(found, render, options = {}) {
       actions2.push(action("skip", { reason: r.skip }));
       continue;
     }
+    if ("delete" in r) {
+      if (f.replyCount > 0) actions2.push(action("blocked", { reason: `a delete would orphan its ${f.replyCount} replies` }));
+      else actions2.push(action("delete", r.reason === void 0 || r.reason === null ? {} : { reason: r.reason }));
+      continue;
+    }
     const sender = r.sender ?? f.content.sender;
     let sent;
     try {
@@ -941,7 +984,13 @@ async function plan(found, render, options = {}) {
     else if (next.files.length > 0 && isOverride(next.sender)) reason = "the sender changes to an override, and Slack shows no files on those";
     actions2.push(reason === null ? action("repost", { new: next, metadata: f.metadata }) : action("blocked", { new: next, reason }));
   }
-  return { thrds_rewrite_plan: PLAN_VERSION, actions: actions2 };
+  actions2.push(...await postActions(options.posts ?? [], new Set(actions2.map((a) => a.ts))));
+  return {
+    thrds_rewrite_plan: PLAN_VERSION,
+    ...options.deleteAfterPosts ? { delete_after_posts: true } : {},
+    ...options.atomic ? { atomic: true } : {},
+    actions: actions2
+  };
 }
 var defaultSleep2 = (ms) => new Promise((r) => setTimeout(r, ms));
 function updatePayload(a, next) {
@@ -968,7 +1017,42 @@ var outcome = (a, status, extra = {}) => ({
   ...extra
 });
 var errorCode = (e) => e instanceof SlackApiError ? e.code : e instanceof Error ? e.message : String(e);
+var overrideOnUserToken = (client, a) => a.new !== null && isOverride(a.new.sender) && client.token.startsWith("xoxp-");
+async function applyPost(client, a, dryRun) {
+  const next = a.new;
+  if (await contentHash(next) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its new content" });
+  if (a.thread_ts !== null && await readMessage(client, a.channel, a.thread_ts) === null) {
+    return outcome(a, "gone", { error: `its thread ${a.thread_ts} is gone` });
+  }
+  if (overrideOnUserToken(client, a)) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-\u2026)" });
+  if (dryRun) return outcome(a, "pending");
+  try {
+    const posted = await client.api("chat.postMessage", postPayload(a, next));
+    return outcome(a, "done", { new_ts: posted["ts"] });
+  } catch (e) {
+    return outcome(a, "failed", { error: errorCode(e) });
+  }
+}
+async function applyDelete(client, a, dryRun) {
+  const old = a.old;
+  if (await contentHash(old) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
+  const m = await readMessage(client, a.channel, a.ts);
+  if (m === null) return outcome(a, "gone");
+  if (await contentHash(contentOf(m)) !== a.hash) return outcome(a, "stale", { error: "changed since planning" });
+  const replies = typeof m["reply_count"] === "number" ? m["reply_count"] : 0;
+  if (replies > 0) return outcome(a, "stale", { error: `now has ${replies} replies` });
+  if (dryRun) return outcome(a, "pending");
+  try {
+    await client.api("chat.delete", { channel: a.channel, ts: a.ts });
+  } catch (e) {
+    if (e instanceof SlackApiError && e.code === "message_not_found") return outcome(a, "gone");
+    return outcome(a, "failed", { error: errorCode(e) });
+  }
+  return outcome(a, "done");
+}
 async function applyOne(client, a, dryRun) {
+  if (a.kind === "post") return applyPost(client, a, dryRun);
+  if (a.kind === "delete") return applyDelete(client, a, dryRun);
   const next = a.new;
   if (await contentHash(a.old) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
   const m = await readMessage(client, a.channel, a.ts);
@@ -980,7 +1064,7 @@ async function applyOne(client, a, dryRun) {
     const replies = typeof m["reply_count"] === "number" ? m["reply_count"] : 0;
     if (replies > 0) return outcome(a, "stale", { error: `now has ${replies} replies` });
     if (!await isLast(client, a.channel, a.ts, a.thread_ts)) return outcome(a, "stale", { error: "no longer the newest; a repost would move it" });
-    if (isOverride(next.sender) && client.token.startsWith("xoxp-")) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-\u2026)" });
+    if (overrideOnUserToken(client, a)) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-\u2026)" });
   }
   if (dryRun) return outcome(a, "pending");
   let newTs;
@@ -1006,18 +1090,32 @@ async function applyOne(client, a, dryRun) {
 async function apply(p, client, options = {}) {
   const { dryRun = true, receipts, paceMs = DEFAULT_PACE_MS, jitterMs = 0, sleep = defaultSleep2, onOutcome } = options;
   const selected = options.only === void 0 ? null : new Set(options.only);
-  const done = receipts === void 0 ? /* @__PURE__ */ new Set() : await receipts.done();
+  const todo = applyOrder(p.actions).filter((a) => writes(a) && (selected === null || selected.has(a.ts)));
+  if (!dryRun && receipts === void 0 && todo.some((a) => a.kind === "post")) {
+    throw new Error("a real run with posts needs receipts (a re-run would post again)");
+  }
+  const done = receipts === void 0 ? /* @__PURE__ */ new Map() : await receipts.done();
+  const unposted = new Set(p.delete_after_posts ? p.actions.filter((a) => a.kind === "post" && !done.has(a.ts)).map((a) => a.ts) : []);
+  const failedPosts = [];
   const out = [];
   let wrote = false;
-  for (const a of p.actions) {
-    if (!writes(a) || selected !== null && !selected.has(a.ts)) continue;
+  for (const a of todo) {
     let o;
-    if (done.has(a.ts)) o = outcome(a, "receipt");
-    else {
+    if (done.has(a.ts)) {
+      const newTs = done.get(a.ts);
+      o = outcome(a, "receipt", newTs === null || newTs === void 0 ? {} : { new_ts: newTs });
+    } else if (a.kind === "delete" && !dryRun && (failedPosts.length > 0 || unposted.size > 0)) {
+      const waiting = failedPosts.length > 0 ? failedPosts : [...unposted].sort();
+      o = outcome(a, "pending", { error: `held: post ${waiting.join(", ")} not done` });
+    } else {
       if (wrote && paceMs > 0) await sleep(paceMs + Math.random() * jitterMs);
       o = await applyOne(client, a, dryRun);
       wrote = o.status === "done" || o.status === "undeleted";
       if (receipts !== void 0 && !dryRun) await receipts.record(o);
+    }
+    if (a.kind === "post") {
+      if (o.status === "done" || o.status === "receipt") unposted.delete(a.ts);
+      else if (!dryRun) failedPosts.push(a.ts);
     }
     out.push(o);
     await onOutcome?.(o);
@@ -1045,20 +1143,21 @@ async function rewriteHandler(request, options) {
     return jsonResponse(400, { error: `bad request: ${e instanceof Error ? e.message : String(e)}` });
   }
   if (!Array.isArray(ids) || !ids.every((i) => typeof i === "string")) {
-    return jsonResponse(400, { error: "bad request: ids must be a list of ts strings" });
+    return jsonResponse(400, { error: "bad request: ids must be a list of strings" });
   }
   const maxBatch = options.maxBatch ?? DEFAULT_BATCH;
   if (ids.length > maxBatch) return jsonResponse(413, { error: `${ids.length} ids; at most ${maxBatch} per request` });
   const known = new Set(p.actions.filter(writes).map((a) => a.ts));
   const unknown = ids.filter((i) => !known.has(i));
-  if (unknown.length > 0) return jsonResponse(400, { error: `not edits or reposts in this plan: ${unknown.join(", ")}` });
+  if (unknown.length > 0) return jsonResponse(400, { error: `not writes in this plan: ${unknown.join(", ")}` });
   try {
     const client = typeof options.client === "function" ? await options.client() : options.client;
     const applyOptions = { dryRun: op === "check", only: ids };
     if (options.receipts !== void 0) applyOptions.receipts = options.receipts;
     if (options.paceMs !== void 0) applyOptions.paceMs = options.paceMs;
     if (options.sleep !== void 0) applyOptions.sleep = options.sleep;
-    return jsonResponse(200, { outcomes: await apply(p, client, applyOptions) });
+    const outcomes = await apply(p, client, applyOptions);
+    return jsonResponse(200, { outcomes, posted: postedOf(outcomes) });
   } catch (e) {
     return jsonResponse(500, { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
   }
@@ -1096,6 +1195,7 @@ export {
   USER_TTL_MS,
   actions,
   apply,
+  applyOrder,
   assertFilesAttachable,
   attachedFiles,
   bound,
@@ -1151,6 +1251,7 @@ export {
   plan,
   planCounts,
   postRewrite,
+  postedOf,
   pyJsonDumps,
   readMessage,
   rewriteHandler,
@@ -1185,6 +1286,7 @@ export {
   withFiles,
   withoutImages,
   withoutPermalinks,
-  writes
+  writes,
+  writesSummary
 };
 //# sourceMappingURL=index.js.map
