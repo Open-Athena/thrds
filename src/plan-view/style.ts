@@ -13,6 +13,8 @@ export const PLAN_VIEW_CSS = `
   --tpv-del-fg: #a40e26;
   --tpv-edit: #1264a3;
   --tpv-repost: #8a4baf;
+  --tpv-post: #2b7a3d;
+  --tpv-delete: #a33b12;
   --tpv-noop: #8d8d8d;
   --tpv-skip: #b07d00;
   --tpv-blocked: #c22a3a;
@@ -35,6 +37,8 @@ export const PLAN_VIEW_CSS = `
     --tpv-del-fg: #f08b97;
     --tpv-edit: #4fa3e3;
     --tpv-repost: #c08ae0;
+    --tpv-post: #6cc985;
+    --tpv-delete: #ee8a5c;
     --tpv-noop: #8d8d8d;
     --tpv-skip: #e0b23c;
     --tpv-blocked: #f0707d;
@@ -54,6 +58,8 @@ export const PLAN_VIEW_CSS = `
   --tpv-del-fg: #f08b97;
   --tpv-edit: #4fa3e3;
   --tpv-repost: #c08ae0;
+  --tpv-post: #6cc985;
+  --tpv-delete: #ee8a5c;
   --tpv-noop: #8d8d8d;
   --tpv-skip: #e0b23c;
   --tpv-blocked: #f0707d;
@@ -84,6 +90,8 @@ export const PLAN_VIEW_CSS = `
 .tpv-badge { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.03em; padding: 1px 8px; border-radius: 4px; border: 1px solid currentColor; }
 .tpv-kind-edit { color: var(--tpv-edit); }
 .tpv-kind-repost { color: var(--tpv-repost); }
+.tpv-kind-post { color: var(--tpv-post); }
+.tpv-kind-delete { color: var(--tpv-delete); }
 .tpv-kind-noop { color: var(--tpv-noop); }
 .tpv-kind-skip { color: var(--tpv-skip); }
 .tpv-kind-blocked { color: var(--tpv-blocked); }
@@ -95,6 +103,8 @@ export const PLAN_VIEW_CSS = `
 .tpv-modes { margin-left: auto; display: inline-flex; gap: 6px; }
 .tpv-sender-change { font-size: 13px; margin-bottom: 8px; color: var(--tpv-repost); }
 .tpv-sides { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 10px; }
+.tpv-struck { opacity: 0.6; text-decoration: line-through; }
+.tpv-summary { font-weight: 600; }
 .tpv-side, .tpv-single { min-width: 0; background: var(--tpv-panel); border-radius: 6px; padding: 8px 10px; }
 .tpv-diff { margin: 0; padding: 8px 10px; background: var(--tpv-panel); border-radius: 6px; overflow-x: auto; font: 13px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .tpv-add { display: block; background: var(--tpv-add-bg); color: var(--tpv-add-fg); }

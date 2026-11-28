@@ -9,11 +9,13 @@ import {
   DEFAULT_PACE_MS,
   PLAN_VERSION,
   POST_SUBTYPES,
+  applyOrder,
   contentHash,
   contentOf,
   foundOf,
   isOverride,
   planCounts,
+  postedOf,
   sameContent,
   sameSender,
   writes,
@@ -26,6 +28,7 @@ import {
   type RewriteKind,
   type RewriteOutcome,
   type RewritePlan,
+  type RewritePost,
   type RewriteReceipts,
   type RewriteStatus,
 } from "./rewrite.js";
@@ -172,14 +175,59 @@ export async function findIds(client: SlackClient, tss: readonly string[], optio
 
 // --- plan ---------------------------------------------------------------
 
-/** One action per found message; no Slack calls. A sender change is a `repost`, `blocked` when the message has replies
- *  (they'd orphan), when it isn't the newest in its container (`reorderOk` allows it), or when it has files and the new
- *  sender is an override (Slack shows no files on those). `render` runs only on this app's own posts. */
-export async function plan(
-  found: Iterable<RewriteFound>,
-  render: Render,
-  options: { reorderOk?: boolean } = {},
-): Promise<RewritePlan> {
+const NO_SENDER = { username: null, icon_url: null, icon_emoji: null };
+const TS_SHAPED = /^\d+\.\d+$/;
+
+async function postActions(posts: Iterable<RewritePost>, taken: Set<string>): Promise<PlannedAction[]> {
+  const out: PlannedAction[] = [];
+  const counts = new Map<string, number>();
+  for (const p of posts) {
+    const sender = p.desired.sender ?? { ...NO_SENDER };
+    let kind: RewriteKind = "post";
+    let reason: string | null = null;
+    let next: RewriteContent;
+    try {
+      next = { ...sendable(p.desired.text, p.desired.blocks ?? null), sender, files: [] };
+    } catch (e) {
+      next = { text: p.desired.text, blocks: p.desired.blocks ?? null, sender, files: [] };
+      kind = "blocked";
+      reason = (e as Error).message;
+    }
+    const hash = await contentHash(next);
+    let key = p.key;
+    if (key === undefined) {
+      const stem = `post-${hash}`;
+      const n = (counts.get(stem) ?? 0) + 1;
+      counts.set(stem, n);
+      key = n === 1 ? stem : `${stem}-${n}`;
+    }
+    if (TS_SHAPED.test(key)) throw new Error(`post key '${key}' looks like a message ts`);
+    if (taken.has(key)) throw new Error(`post key '${key}' is already an id in the plan`);
+    taken.add(key);
+    const a: PlannedAction = { kind, channel: p.channel, ts: key, thread_ts: p.threadTs, hash, old: null, new: next, reason };
+    if (p.broadcast && p.threadTs !== null) a.broadcast = true;
+    if (p.metadata !== undefined && p.metadata !== null) a.metadata = p.metadata;
+    out.push(a);
+  }
+  return out;
+}
+
+export interface PlanOptions {
+  /** Allow a repost that moves a message to the end of its channel / thread. */
+  reorderOk?: boolean;
+  /** New messages, posted in this order after the found messages' writes. */
+  posts?: Iterable<RewritePost>;
+  /** See `RewritePlan.delete_after_posts`. */
+  deleteAfterPosts?: boolean;
+  /** See `RewritePlan.atomic`. */
+  atomic?: boolean;
+}
+
+/** One action per found message, then one `post` per `posts`; no Slack calls. A sender change is a `repost`, `blocked`
+ *  when the message has replies (they'd orphan), when it isn't the newest in its container (`reorderOk` allows it), or
+ *  when it has files and the new sender is an override (Slack shows no files on those). A `Delete` is `blocked` when
+ *  the message has replies. `render` runs only on this app's own posts. Python's `plan`. */
+export async function plan(found: Iterable<RewriteFound>, render: Render, options: PlanOptions = {}): Promise<RewritePlan> {
   const actions: PlannedAction[] = [];
   for (const f of found) {
     const hash = await contentHash(f.content);
@@ -211,6 +259,11 @@ export async function plan(
       actions.push(action("skip", { reason: r.skip }));
       continue;
     }
+    if ("delete" in r) {
+      if (f.replyCount > 0) actions.push(action("blocked", { reason: `a delete would orphan its ${f.replyCount} replies` }));
+      else actions.push(action("delete", r.reason === undefined || r.reason === null ? {} : { reason: r.reason }));
+      continue;
+    }
     const sender = r.sender ?? f.content.sender;
     let sent: { text: string; blocks: Block[] | null };
     try {
@@ -237,7 +290,13 @@ export async function plan(
     // The repost carries the message's metadata (apps find their posts by it).
     actions.push(reason === null ? action("repost", { new: next, metadata: f.metadata }) : action("blocked", { new: next, reason }));
   }
-  return { thrds_rewrite_plan: PLAN_VERSION, actions };
+  actions.push(...(await postActions(options.posts ?? [], new Set(actions.map((a) => a.ts)))));
+  return {
+    thrds_rewrite_plan: PLAN_VERSION,
+    ...(options.deleteAfterPosts ? { delete_after_posts: true } : {}),
+    ...(options.atomic ? { atomic: true } : {}),
+    actions,
+  };
 }
 
 // --- apply --------------------------------------------------------------
@@ -284,9 +343,48 @@ const outcome = (a: PlannedAction, status: RewriteStatus, extra: { new_ts?: stri
 
 const errorCode = (e: unknown): string => (e instanceof SlackApiError ? e.code : e instanceof Error ? e.message : String(e));
 
-async function applyOne(client: SlackClient, a: PlannedAction, dryRun: boolean): Promise<RewriteOutcome> {
+const overrideOnUserToken = (client: SlackClient, a: PlannedAction): boolean =>
+  a.new !== null && isOverride(a.new.sender) && client.token.startsWith("xoxp-");
+
+async function applyPost(client: SlackClient, a: PlannedAction, dryRun: boolean): Promise<RewriteOutcome> {
   const next = a.new!;
-  if ((await contentHash(a.old)) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
+  if ((await contentHash(next)) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its new content" });
+  if (a.thread_ts !== null && (await readMessage(client, a.channel, a.thread_ts)) === null) {
+    return outcome(a, "gone", { error: `its thread ${a.thread_ts} is gone` });
+  }
+  if (overrideOnUserToken(client, a)) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-…)" });
+  if (dryRun) return outcome(a, "pending");
+  try {
+    const posted = await client.api("chat.postMessage", postPayload(a, next));
+    return outcome(a, "done", { new_ts: posted["ts"] as string });
+  } catch (e) {
+    return outcome(a, "failed", { error: errorCode(e) });
+  }
+}
+
+async function applyDelete(client: SlackClient, a: PlannedAction, dryRun: boolean): Promise<RewriteOutcome> {
+  const old = a.old!;
+  if ((await contentHash(old)) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
+  const m = await readMessage(client, a.channel, a.ts);
+  if (m === null) return outcome(a, "gone");
+  if ((await contentHash(contentOf(m))) !== a.hash) return outcome(a, "stale", { error: "changed since planning" });
+  const replies = typeof m["reply_count"] === "number" ? m["reply_count"] : 0;
+  if (replies > 0) return outcome(a, "stale", { error: `now has ${replies} replies` });
+  if (dryRun) return outcome(a, "pending");
+  try {
+    await client.api("chat.delete", { channel: a.channel, ts: a.ts });
+  } catch (e) {
+    if (e instanceof SlackApiError && e.code === "message_not_found") return outcome(a, "gone");
+    return outcome(a, "failed", { error: errorCode(e) });
+  }
+  return outcome(a, "done");
+}
+
+async function applyOne(client: SlackClient, a: PlannedAction, dryRun: boolean): Promise<RewriteOutcome> {
+  if (a.kind === "post") return applyPost(client, a, dryRun);
+  if (a.kind === "delete") return applyDelete(client, a, dryRun);
+  const next = a.new!;
+  if ((await contentHash(a.old!)) !== a.hash) return outcome(a, "failed", { error: "the plan's hash doesn't match its old content" });
   const m = await readMessage(client, a.channel, a.ts);
   if (m === null) return outcome(a, "gone");
   const live = contentOf(m);
@@ -296,7 +394,7 @@ async function applyOne(client: SlackClient, a: PlannedAction, dryRun: boolean):
     const replies = typeof m["reply_count"] === "number" ? m["reply_count"] : 0;
     if (replies > 0) return outcome(a, "stale", { error: `now has ${replies} replies` });
     if (!(await isLast(client, a.channel, a.ts, a.thread_ts))) return outcome(a, "stale", { error: "no longer the newest; a repost would move it" });
-    if (isOverride(next.sender) && client.token.startsWith("xoxp-")) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-…)" });
+    if (overrideOnUserToken(client, a)) return outcome(a, "failed", { error: "a sender override needs a bot token (xoxb-…)" });
   }
   if (dryRun) return outcome(a, "pending");
   let newTs: string;
@@ -321,25 +419,43 @@ async function applyOne(client: SlackClient, a: PlannedAction, dryRun: boolean):
 }
 
 /**
- * Carry out the plan's `edit` / `repost` actions in order. A dry run by default: each action is still checked against
- * its message (`pending` / `stale` / `gone` / `already`), but nothing is written. A repost posts the new message
- * before deleting the old one, so a failed delete leaves a duplicate (`undeleted`), never a loss.
+ * Carry out the plan's writes (`only`: just these ids: a message's ts, a post's key), in `applyOrder`: the plan's
+ * order, with every `delete` after the rest. A dry run by default: each action is still checked against its message
+ * (`pending` / `stale` / `gone` / `already`), but nothing is written. A repost posts the new message before deleting
+ * the old one, so a failed delete leaves a duplicate (`undeleted`), never a loss; likewise a `post` that fails holds the
+ * run's deletes (left `pending`), and with `delete_after_posts` a delete waits for every post in the plan. A real run
+ * with posts needs `receipts`, so a re-run never posts twice. Python's `apply`.
  */
 export async function apply(p: RewritePlan, client: SlackClient, options: ApplyOptions = {}): Promise<RewriteOutcome[]> {
   const { dryRun = true, receipts, paceMs = DEFAULT_PACE_MS, jitterMs = 0, sleep = defaultSleep, onOutcome } = options;
   const selected = options.only === undefined ? null : new Set(options.only);
-  const done = receipts === undefined ? new Set<string>() : await receipts.done();
+  const todo = applyOrder(p.actions).filter((a) => writes(a) && (selected === null || selected.has(a.ts)));
+  if (!dryRun && receipts === undefined && todo.some((a) => a.kind === "post")) {
+    throw new Error("a real run with posts needs receipts (a re-run would post again)");
+  }
+  const done = receipts === undefined ? new Map<string, string | null>() : await receipts.done();
+  // Posts not done yet: a failure this run, or (with `delete_after_posts`) any post of the plan.
+  const unposted = new Set(p.delete_after_posts ? p.actions.filter((a) => a.kind === "post" && !done.has(a.ts)).map((a) => a.ts) : []);
+  const failedPosts: string[] = [];
   const out: RewriteOutcome[] = [];
   let wrote = false;
-  for (const a of p.actions) {
-    if (!writes(a) || (selected !== null && !selected.has(a.ts))) continue;
+  for (const a of todo) {
     let o: RewriteOutcome;
-    if (done.has(a.ts)) o = outcome(a, "receipt");
-    else {
+    if (done.has(a.ts)) {
+      const newTs = done.get(a.ts);
+      o = outcome(a, "receipt", newTs === null || newTs === undefined ? {} : { new_ts: newTs });
+    } else if (a.kind === "delete" && !dryRun && (failedPosts.length > 0 || unposted.size > 0)) {
+      const waiting = failedPosts.length > 0 ? failedPosts : [...unposted].sort();
+      o = outcome(a, "pending", { error: `held: post ${waiting.join(", ")} not done` });
+    } else {
       if (wrote && paceMs > 0) await sleep(paceMs + Math.random() * jitterMs);
       o = await applyOne(client, a, dryRun);
       wrote = o.status === "done" || o.status === "undeleted";
       if (receipts !== undefined && !dryRun) await receipts.record(o);
+    }
+    if (a.kind === "post") {
+      if (o.status === "done" || o.status === "receipt") unposted.delete(a.ts);
+      else if (!dryRun) failedPosts.push(a.ts);
     }
     out.push(o);
     await onOutcome?.(o);
@@ -368,9 +484,10 @@ const jsonResponse = (status: number, body: unknown): Response =>
 
 /**
  * `PlanView`'s backend, for a Worker / Pages Function behind the app's own auth: by the request path's last segment,
- * `GET …/plan` → `{path, plan}` (with `counts`), `POST …/check` / `…/apply` `{ids}` → `{outcomes}` (a dry run for
- * `check`). A POST must be `application/json` and, when the browser sends an `Origin`, same-origin; ids must be the
- * plan's edits / reposts, at most `maxBatch`.
+ * `GET …/plan` → `{path, plan}` (with `counts`), `POST …/check` / `…/apply` `{ids}` → `{outcomes, posted}` (a dry
+ * run for `check`; `posted`: each post's key → its ts, as `postedOf`). A POST must be `application/json` and, when the
+ * browser sends an `Origin`, same-origin; ids must be the plan's writes (a message's ts, a post's key), at most
+ * `maxBatch`. A plan with posts needs `receipts` to apply.
  */
 export async function rewriteHandler(request: Request, options: RewriteHandlerOptions): Promise<Response> {
   const url = new URL(request.url);
@@ -392,20 +509,21 @@ export async function rewriteHandler(request: Request, options: RewriteHandlerOp
     return jsonResponse(400, { error: `bad request: ${e instanceof Error ? e.message : String(e)}` });
   }
   if (!Array.isArray(ids) || !ids.every((i): i is string => typeof i === "string")) {
-    return jsonResponse(400, { error: "bad request: ids must be a list of ts strings" });
+    return jsonResponse(400, { error: "bad request: ids must be a list of strings" });
   }
   const maxBatch = options.maxBatch ?? DEFAULT_BATCH;
   if (ids.length > maxBatch) return jsonResponse(413, { error: `${ids.length} ids; at most ${maxBatch} per request` });
   const known = new Set(p.actions.filter(writes).map((a) => a.ts));
   const unknown = ids.filter((i) => !known.has(i));
-  if (unknown.length > 0) return jsonResponse(400, { error: `not edits or reposts in this plan: ${unknown.join(", ")}` });
+  if (unknown.length > 0) return jsonResponse(400, { error: `not writes in this plan: ${unknown.join(", ")}` });
   try {
     const client = typeof options.client === "function" ? await options.client() : options.client;
     const applyOptions: ApplyOptions = { dryRun: op === "check", only: ids };
     if (options.receipts !== undefined) applyOptions.receipts = options.receipts;
     if (options.paceMs !== undefined) applyOptions.paceMs = options.paceMs;
     if (options.sleep !== undefined) applyOptions.sleep = options.sleep;
-    return jsonResponse(200, { outcomes: await apply(p, client, applyOptions) });
+    const outcomes = await apply(p, client, applyOptions);
+    return jsonResponse(200, { outcomes, posted: postedOf(outcomes) });
   } catch (e) {
     return jsonResponse(500, { error: e instanceof Error ? `${e.name}: ${e.message}` : String(e) });
   }

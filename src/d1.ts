@@ -160,8 +160,8 @@ export function sqliteD1(db: SqliteLike): D1Like {
 
 /**
  * A bulk rewrite's receipts in D1, keyed by `plan` (any id naming the plan: its storage key, or a hash of it): each
- * real outcome is a row, and `done()` is the ts already `done` / `already`, so a re-run (or the next batch's request)
- * skips them.
+ * real outcome is a row (`ts`: the action's id, a post's key), and `done()` is the ids already `done` / `already` with
+ * any ts they posted, so a re-run (or the next batch's request) skips them.
  */
 export function d1Receipts(db: D1Like, plan: string, options: { table?: string; now?: () => number } = {}): RewriteReceipts {
   const t = ident(options.table ?? "thrds_rewrite_receipts");
@@ -169,10 +169,10 @@ export function d1Receipts(db: D1Like, plan: string, options: { table?: string; 
   return {
     async done() {
       const row = await db
-        .prepare(`SELECT group_concat(ts, ' ') AS tss FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`)
+        .prepare(`SELECT json_group_array(json_array(ts, new_ts)) AS rows FROM ${t} WHERE plan = ? AND status IN ('done', 'already')`)
         .bind(plan)
-        .first<{ tss: string | null }>();
-      return new Set(row?.tss ? row.tss.split(" ") : []);
+        .first<{ rows: string }>();
+      return new Map(JSON.parse(row?.rows ?? "[]") as Array<[string, string | null]>);
     },
     async record(o: RewriteOutcome) {
       await db

@@ -12,6 +12,7 @@ import {
   memoryReceipts,
   plan,
   postRewrite,
+  postedOf,
   fallbackText,
   rewriteHandler,
   sameContent,
@@ -19,10 +20,12 @@ import {
   sendable,
   substitute,
   verifyPlan,
+  type Delete,
   type Desired,
   type RewriteContent,
   type RewriteFound,
   type RewritePlan,
+  type RewritePost,
   type RewriteSender,
   type Skip,
 } from "../src/index";
@@ -107,7 +110,7 @@ describe("parity with Python thrds.rewrite", () => {
     expect(await plan(await findHistory(client, { includeReplies: true, includeForeign: true }), render)).toEqual(verified);
 
     const tampered = structuredClone(py) as RewritePlan;
-    tampered.actions.find((a) => a.ts === "5.0")!.old.text = "edited by hand";
+    tampered.actions.find((a) => a.ts === "5.0")!.old!.text = "edited by hand";
     await expect(verifyPlan(tampered)).rejects.toThrow(/^plan action 5\.0: recorded hash \w+ doesn't match its old content \(\w+\)$/);
   });
 
@@ -173,7 +176,7 @@ describe("text over Slack's 4,000, as Python's `post` / `edit` send it", () => {
       ["2.0", "edit", null],
       ["3.0", "blocked", "new text is 153049 chars, 51 sections over Slack's 50 blocks"],
     ]);
-    expect(p.actions[1]!.new).toEqual({ text: LONG_FALLBACK, blocks: LONG_SECTIONS, sender: p.actions[1]!.old.sender, files: [] });
+    expect(p.actions[1]!.new).toEqual({ text: LONG_FALLBACK, blocks: LONG_SECTIONS, sender: p.actions[1]!.old!.sender, files: [] });
     expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["2.0", "done"]]);
     expect(chatCalls(calls)).toEqual([["chat.update", { channel: "C1", ts: "2.0", text: LONG_FALLBACK, blocks: LONG_SECTIONS }]]);
     expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["2.0", "already"]]);
@@ -345,7 +348,7 @@ describe("apply", () => {
     const p = await plan(await findHistory(client), sub);
     messages.find((m) => m.ts === "4.0")!.text = "someone edited this";
     messages.splice(messages.findIndex((m) => m.ts === "1.0"), 1);
-    p.actions.find((a) => a.ts === "2.0")!.old.text = "tampered";
+    p.actions.find((a) => a.ts === "2.0")!.old!.text = "tampered";
     expect(await apply(p, client, { dryRun: false, paceMs: 0 })).toEqual([
       { ts: "4.0", kind: "edit", status: "stale", error: "changed since planning" },
       { ts: "2.0", kind: "edit", status: "failed", error: "the plan's hash doesn't match its old content" },
@@ -429,14 +432,14 @@ describe("d1Receipts", () => {
     const db = sqliteD1(raw);
     const a = d1Receipts(db, "plan-a", { now: () => 1700 });
     const b = d1Receipts(db, "plan-b", { now: () => 1700 });
-    expect(await a.done()).toEqual(new Set());
+    expect(await a.done()).toEqual(new Map());
     await a.record({ ts: "1.0", kind: "edit", status: "done" });
     await a.record({ ts: "2.0", kind: "edit", status: "stale", error: "changed since planning" });
     await a.record({ ts: "3.0", kind: "repost", status: "undeleted", new_ts: "9.0", error: "cant_delete_message" });
     await a.record({ ts: "4.0", kind: "edit", status: "already" });
     await b.record({ ts: "5.0", kind: "edit", status: "done" });
-    expect(await a.done()).toEqual(new Set(["1.0", "4.0"]));
-    expect(await b.done()).toEqual(new Set(["5.0"]));
+    expect(await a.done()).toEqual(new Map([["1.0", null], ["4.0", null]]));
+    expect(await b.done()).toEqual(new Map([["5.0", null]]));
     expect(raw.prepare("SELECT * FROM thrds_rewrite_receipts WHERE plan = 'plan-a' ORDER BY ts").all()).toEqual([
       { plan: "plan-a", ts: "1.0", kind: "edit", status: "done", new_ts: null, error: null, at: 1700 },
       { plan: "plan-a", ts: "2.0", kind: "edit", status: "stale", new_ts: null, error: "changed since planning", at: 1700 },
@@ -462,13 +465,13 @@ describe("rewriteHandler / postRewrite", () => {
     const { p, handle, post, receipts } = await setup();
     const res = await handle(new Request(`${ORIGIN}/api/rewrite/plan`));
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ path: "march digest", plan: { ...p, counts: { edit: 4, repost: 0, noop: 1, skip: 0, blocked: 2 } } });
+    expect(await res.json()).toEqual({ path: "march digest", plan: { ...p, counts: { edit: 4, repost: 0, post: 0, delete: 0, noop: 1, skip: 0, blocked: 2 } } });
 
     const check = await post("check", { ids: ["4.0", "1.0"] });
-    expect(await check.json()).toEqual({ outcomes: [{ ts: "4.0", kind: "edit", status: "pending" }, { ts: "1.0", kind: "edit", status: "pending" }] });
+    expect(await check.json()).toEqual({ outcomes: [{ ts: "4.0", kind: "edit", status: "pending" }, { ts: "1.0", kind: "edit", status: "pending" }], posted: {} });
     expect(receipts.outcomes).toEqual([]);
     const applied = await post("apply", { ids: ["4.0"] });
-    expect(await applied.json()).toEqual({ outcomes: [{ ts: "4.0", kind: "edit", status: "done" }] });
+    expect(await applied.json()).toEqual({ outcomes: [{ ts: "4.0", kind: "edit", status: "done" }], posted: {} });
     expect(receipts.outcomes).toEqual([{ ts: "4.0", kind: "edit", status: "done" }]);
   });
 
@@ -477,8 +480,8 @@ describe("rewriteHandler / postRewrite", () => {
     const refusal = async (res: Response) => [res.status, ((await res.json()) as { error: string }).error];
     expect(await refusal(await post("apply", { ids: ["4.0"] }, { "Content-Type": "text/plain" }))).toEqual([415, "expected Content-Type: application/json"]);
     expect(await refusal(await post("apply", { ids: ["4.0"] }, { Origin: "https://evil.example" }))).toEqual([403, "cross-origin request from https://evil.example"]);
-    expect(await refusal(await post("apply", { ids: "4.0" }))).toEqual([400, "bad request: ids must be a list of ts strings"]);
-    expect(await refusal(await post("apply", { ids: ["3.0", "5.0"] }))).toEqual([400, "not edits or reposts in this plan: 3.0, 5.0"]);
+    expect(await refusal(await post("apply", { ids: "4.0" }))).toEqual([400, "bad request: ids must be a list of strings"]);
+    expect(await refusal(await post("apply", { ids: ["3.0", "5.0"] }))).toEqual([400, "not writes in this plan: 3.0, 5.0"]);
     expect(await refusal(await post("apply", { ids: ["4.0", "2.0", "1.0"] }))).toEqual([413, "3 ids; at most 2 per request"]);
     expect(await refusal(await handle(new Request(`${ORIGIN}/api/rewrite/nope`)))).toEqual([404, "not found: GET /api/rewrite/nope"]);
   });
@@ -500,6 +503,197 @@ describe("rewriteHandler / postRewrite", () => {
       ["2.1", "done"],
       ["1.0", "done"],
     ]);
-    await expect(postRewrite("/api/rewrite/apply", ["3.0"], { fetch: f })).rejects.toThrow(/^not edits or reposts in this plan: 3\.0$/);
+    await expect(postRewrite("/api/rewrite/apply", ["3.0"], { fetch: f })).rejects.toThrow(/^not writes in this plan: 3\.0$/);
+  });
+});
+
+/** Python's `tests/test_rewrite_post_delete.py`: an OP, three daily replies (ours), a person's reply. */
+const thread = (options: Parameters<typeof fakeChannel>[0] = {}) =>
+  fakeChannel({
+    ...options,
+    messages: [
+      ours("1.0", "November", { thread_ts: "1.0" }),
+      ours("1.1", "Nov 1", { thread_ts: "1.0" }),
+      ours("1.2", "Nov 2", { thread_ts: "1.0" }),
+      ours("1.3", "Nov 3", { thread_ts: "1.0" }),
+      theirs("1.4", "nice", { thread_ts: "1.0" }),
+    ],
+  });
+const switchRender = (f: RewriteFound): Skip | Delete => (f.ts === "1.0" ? { skip: "the OP" } : { delete: true, reason: "replaced by the weekly replies" });
+const WEEKS: RewritePost[] = [
+  { channel: "C1", threadTs: "1.0", desired: { text: "Week 1: Nov 1–2" }, key: "wk-1" },
+  { channel: "C1", threadTs: "1.0", desired: { text: "Week 2: Nov 3", sender: DIGEST }, key: "wk-2" },
+];
+const DELETES = ["1.1", "1.2", "1.3"];
+
+describe("post and delete", () => {
+  it("plans a thread switch as Python does", async () => {
+    const py = fixture("rewrite-plan-switch.json");
+    const verified = await verifyPlan(py);
+    const same: Desired = { text: "Week 3 :soon:" };
+    const posts: RewritePost[] = [
+      ...WEEKS,
+      { channel: "C1", threadTs: "1.0", desired: same },
+      { channel: "C1", threadTs: "1.0", desired: same, broadcast: true },
+      { channel: "C1", threadTs: null, desired: { text: `${"x".repeat(3001)}\n${"y".repeat(1000)}` }, key: "long" },
+    ];
+    const { client } = thread();
+    const p = await plan(await findThread(client, "1.0", { includeForeign: true }), switchRender, { posts, deleteAfterPosts: true, atomic: true });
+    expect(p).toEqual(verified);
+    expect(kinds(p)).toEqual([
+      ["1.0", "skip", "the OP"],
+      ["1.1", "delete", "replaced by the weekly replies"],
+      ["1.2", "delete", "replaced by the weekly replies"],
+      ["1.3", "delete", "replaced by the weekly replies"],
+      ["1.4", "blocked", "another app's or a person's message"],
+      ["wk-1", "post", null],
+      ["wk-2", "post", null],
+      [`post-${await contentHash({ text: "Week 3 :soon:", blocks: null, sender: { username: null, icon_url: null, icon_emoji: null }, files: [] })}`, "post", null],
+      [`${p.actions[7]!.ts}-2`, "post", null],
+      ["long", "blocked", "Message body has a line over Slack's 3000-char section limit (3001 chars)"],
+    ]);
+    const tampered = structuredClone(py) as RewritePlan;
+    tampered.actions.find((a) => a.ts === "wk-1")!.new!.text = "edited by hand";
+    await expect(verifyPlan(tampered)).rejects.toThrow(/^plan action wk-1: recorded hash \w+ doesn't match its new content \(\w+\)$/);
+    const doubled = structuredClone(py) as RewritePlan;
+    doubled.actions.push(doubled.actions[5]!);
+    await expect(verifyPlan(doubled)).rejects.toThrow(/^plan actions share ids: wk-1$/);
+  });
+
+  it("refuses ts-shaped and repeated keys, and blocks deleting a message with replies", async () => {
+    await expect(plan([], switchRender, { posts: [{ channel: "C1", threadTs: null, desired: { text: "x" }, key: "1.5" }] })).rejects.toThrow(
+      /^post key '1\.5' looks like a message ts$/,
+    );
+    await expect(plan([], switchRender, { posts: [WEEKS[0]!, WEEKS[0]!] })).rejects.toThrow(/^post key 'wk-1' is already an id in the plan$/);
+    const { client } = thread();
+    expect(kinds(await plan(await findThread(client, "1.0"), () => ({ delete: true })))).toEqual([
+      ["1.0", "blocked", "a delete would orphan its 4 replies"],
+      ["1.1", "delete", null],
+      ["1.2", "delete", null],
+      ["1.3", "delete", null],
+    ]);
+  });
+
+  it("posts before deleting, reports what it posted, and never posts twice", async () => {
+    const { client, calls, messages } = thread();
+    const p = await plan(await findThread(client, "1.0"), switchRender, { posts: WEEKS });
+    expect(statuses(await apply(p, client, { paceMs: 0 }))).toEqual([
+      ["wk-1", "pending"], ["wk-2", "pending"], ["1.1", "pending"], ["1.2", "pending"], ["1.3", "pending"],
+    ]);
+    await expect(apply(p, client, { dryRun: false, paceMs: 0 })).rejects.toThrow(/^a real run with posts needs receipts \(a re-run would post again\)$/);
+    expect(chatCalls(calls)).toEqual([]);
+
+    const receipts = memoryReceipts();
+    const outcomes = await apply(p, client, { dryRun: false, receipts, paceMs: 0 });
+    expect(outcomes).toEqual([
+      { ts: "wk-1", kind: "post", status: "done", new_ts: "101.000000" },
+      { ts: "wk-2", kind: "post", status: "done", new_ts: "102.000000" },
+      { ts: "1.1", kind: "delete", status: "done" },
+      { ts: "1.2", kind: "delete", status: "done" },
+      { ts: "1.3", kind: "delete", status: "done" },
+    ]);
+    expect(postedOf(outcomes)).toEqual({ "wk-1": "101.000000", "wk-2": "102.000000" });
+    expect(chatCalls(calls)).toEqual([
+      ["chat.postMessage", { channel: "C1", text: "Week 1: Nov 1–2", unfurl_links: false, unfurl_media: false, thread_ts: "1.0" }],
+      ["chat.postMessage", { channel: "C1", text: "Week 2: Nov 3", unfurl_links: false, unfurl_media: false, thread_ts: "1.0", username: "Digest", icon_emoji: ":bar_chart:" }],
+      ["chat.delete", { channel: "C1", ts: "1.1" }],
+      ["chat.delete", { channel: "C1", ts: "1.2" }],
+      ["chat.delete", { channel: "C1", ts: "1.3" }],
+    ]);
+    expect(messages.map((m) => [m.ts, m.text])).toEqual([["1.0", "November"], ["1.4", "nice"], ["101.000000", "Week 1: Nov 1–2"], ["102.000000", "Week 2: Nov 3"]]);
+
+    calls.length = 0;
+    const again = await apply(p, client, { dryRun: false, receipts, paceMs: 0 });
+    expect(again.map((o) => [o.ts, o.status, o.new_ts])).toEqual([
+      ["wk-1", "receipt", "101.000000"], ["wk-2", "receipt", "102.000000"], ["1.1", "receipt", undefined], ["1.2", "receipt", undefined], ["1.3", "receipt", undefined],
+    ]);
+    expect(postedOf(again)).toEqual({ "wk-1": "101.000000", "wk-2": "102.000000" });
+    expect(chatCalls(calls)).toEqual([]);
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0, only: DELETES }))).toEqual([["1.1", "gone"], ["1.2", "gone"], ["1.3", "gone"]]);
+  });
+
+  it("holds the deletes when a post fails", async () => {
+    const { client, calls } = thread({
+      intercept: (call) => (call.method === "chat.postMessage" && call.body["text"] === "Week 2: Nov 3" ? { body: { ok: false, error: "msg_too_long" } } : undefined),
+    });
+    const receipts = memoryReceipts();
+    const p = await plan(await findThread(client, "1.0"), switchRender, { posts: WEEKS });
+    expect(await apply(p, client, { dryRun: false, receipts, paceMs: 0 })).toEqual([
+      { ts: "wk-1", kind: "post", status: "done", new_ts: "101.000000" },
+      { ts: "wk-2", kind: "post", status: "failed", error: "msg_too_long" },
+      { ts: "1.1", kind: "delete", status: "pending", error: "held: post wk-2 not done" },
+      { ts: "1.2", kind: "delete", status: "pending", error: "held: post wk-2 not done" },
+      { ts: "1.3", kind: "delete", status: "pending", error: "held: post wk-2 not done" },
+    ]);
+    expect(chatCalls(calls).map((c) => c[0])).toEqual(["chat.postMessage", "chat.postMessage"]);
+    expect(receipts.outcomes.map((o) => [o.ts, o.status])).toEqual([["wk-1", "done"], ["wk-2", "failed"]]);
+  });
+
+  it("with `delete_after_posts`, a delete waits for every post across runs", async () => {
+    const { client, calls } = thread();
+    const receipts = memoryReceipts();
+    const p = await plan(await findThread(client, "1.0"), switchRender, { posts: WEEKS, deleteAfterPosts: true });
+    const run = (only: string[], dryRun = false) => apply(p, client, { dryRun, receipts, paceMs: 0, only });
+    expect((await run(["1.1", "1.2"])).map((o) => [o.ts, o.status, o.error])).toEqual([
+      ["1.1", "pending", "held: post wk-1, wk-2 not done"],
+      ["1.2", "pending", "held: post wk-1, wk-2 not done"],
+    ]);
+    expect(statuses(await run(["1.1", "1.2"], true))).toEqual([["1.1", "pending"], ["1.2", "pending"]]);
+    expect(statuses(await run(["wk-1"]))).toEqual([["wk-1", "done"]]);
+    expect((await run(["1.1"])).map((o) => o.error)).toEqual(["held: post wk-2 not done"]);
+    expect(statuses(await run(["1.3", "1.2", "1.1", "wk-2"]))).toEqual([["wk-2", "done"], ["1.1", "done"], ["1.2", "done"], ["1.3", "done"]]);
+    expect(chatCalls(calls).map((c) => c[0])).toEqual(["chat.postMessage", "chat.postMessage", "chat.delete", "chat.delete", "chat.delete"]);
+  });
+
+  it("refuses a delete whose message changed, and a post whose thread is gone or whose sender needs a bot token", async () => {
+    const { client, calls, messages } = thread({ clientOptions: { token: "xoxp-user" } });
+    const p = await plan(await findThread(client, "1.0"), switchRender, {
+      posts: [...WEEKS, { channel: "C1", threadTs: "9.0", desired: { text: "into nothing" }, key: "lost" }],
+    });
+    messages.find((m) => m.ts === "1.1")!.text = "Nov 1, edited";
+    messages.splice(messages.findIndex((m) => m.ts === "1.2"), 1);
+    (messages.find((m) => m.ts === "1.3")! as FakeMessage & { reply_count?: number }).reply_count = 1;
+    const outcomes = await apply(p, client, { dryRun: false, receipts: memoryReceipts(), paceMs: 0, only: ["wk-2", "lost", ...DELETES] });
+    expect(outcomes.map((o) => [o.ts, o.status, o.error])).toEqual([
+      ["wk-2", "failed", "a sender override needs a bot token (xoxb-…)"],
+      ["lost", "gone", "its thread 9.0 is gone"],
+      ["1.1", "pending", "held: post wk-2, lost not done"],
+      ["1.2", "pending", "held: post wk-2, lost not done"],
+      ["1.3", "pending", "held: post wk-2, lost not done"],
+    ]);
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0, only: DELETES }))).toEqual([["1.1", "stale"], ["1.2", "gone"], ["1.3", "stale"]]);
+    expect((await apply(p, client, { paceMs: 0, only: ["1.1", "1.3"] })).map((o) => o.error)).toEqual(["changed since planning", "now has 1 replies"]);
+    expect(chatCalls(calls)).toEqual([]);
+  });
+
+  it("d1Receipts keeps each post's ts", async () => {
+    const raw = new DatabaseSync(":memory:");
+    raw.exec(rewriteReceiptsSchema());
+    const r = d1Receipts(sqliteD1(raw), "switch");
+    await r.record({ ts: "wk-1", kind: "post", status: "done", new_ts: "101.000000" });
+    await r.record({ ts: "1.1", kind: "delete", status: "done" });
+    await r.record({ ts: "wk-2", kind: "post", status: "failed", error: "msg_too_long" });
+    expect(await r.done()).toEqual(new Map([["wk-1", "101.000000"], ["1.1", null]]));
+  });
+
+  it("rewriteHandler takes post keys and returns what it posted", async () => {
+    const { client } = thread();
+    const p = await plan(await findThread(client, "1.0"), switchRender, { posts: WEEKS, deleteAfterPosts: true, atomic: true });
+    const receipts = memoryReceipts();
+    const post = (ids: string[]) =>
+      rewriteHandler(new Request("https://app.dev/api/rewrite/apply", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ ids }) }), {
+        plan: p,
+        client,
+        receipts,
+        paceMs: 0,
+      });
+    expect(await (await post(["wk-1", "wk-2"])).json()).toEqual({
+      outcomes: [
+        { ts: "wk-1", kind: "post", status: "done", new_ts: "101.000000" },
+        { ts: "wk-2", kind: "post", status: "done", new_ts: "102.000000" },
+      ],
+      posted: { "wk-1": "101.000000", "wk-2": "102.000000" },
+    });
+    expect(await (await post(["1.1"])).json()).toEqual({ outcomes: [{ ts: "1.1", kind: "delete", status: "done" }], posted: {} });
   });
 });

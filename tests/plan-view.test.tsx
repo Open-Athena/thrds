@@ -115,3 +115,44 @@ describe("PlanView", () => {
     expect(html(<Diff from="a" to="a" />)).toBe('<div class="tpv-muted tpv-diff-none">Text unchanged (blocks or sender change).</div>');
   });
 });
+
+describe("PlanView: posts and deletes", () => {
+  const post = (ts: string, text: string): PlannedAction => ({ kind: "post", channel: "C1", ts, thread_ts: "1.0", hash: `h${ts}`, old: null, new: content(text), reason: null });
+  const del = (ts: string, text: string): PlannedAction => ({ kind: "delete", channel: "C1", ts, thread_ts: "1.0", hash: `h${ts}`, old: content(text), new: null, reason: "replaced" });
+  const plan: RewritePlan = {
+    thrds_rewrite_plan: 1,
+    delete_after_posts: true,
+    actions: [del("1.1", "Nov 1"), del("1.2", "Nov 2"), post("wk-1", "Week 1")],
+  };
+  const rows = (markup: string) => [...markup.matchAll(/<li class="tpv-action tpv-action-(\w+)">/g)].map((m) => m[1]);
+  const chips = (markup: string) => [...markup.matchAll(/tpv-kind-(\w+)" aria-pressed="\w+">\1 <span class="tpv-count">(\d+)/g)].map((m) => [m[1], m[2]]);
+
+  it("shows a post's new message, a delete's old one struck, and the writes in the header", () => {
+    const markup = html(<PlanView plan={plan} unstyled onApply={() => {}} />);
+    expect(rows(markup)).toEqual(["delete", "delete", "post"]);
+    expect(markup.match(/<span class="tpv-summary">([^<]+)<\/span>/)?.[1]).toBe("1 to post · 2 to delete");
+    expect(chips(markup)).toEqual([["edit", "0"], ["repost", "0"], ["post", "1"], ["delete", "2"], ["noop", "0"], ["skip", "0"], ["blocked", "0"]]);
+    expect([...markup.matchAll(/aria-label="Select ([\w.-]+)"/g)].map((m) => m[1])).toEqual(["1.1", "1.2", "wk-1"]);
+    expect(markup.match(/<span>(\d+) of (\d+) selected<\/span>/)?.slice(1)).toEqual(["3", "3"]);
+    expect([...markup.matchAll(/<div class="tpv-single( tpv-struck)?">(<div class="tpv-side-label">New<\/div>)?/g)].map((m) => [m[1] ?? "", m[2] ?? ""])).toEqual([
+      [" tpv-struck", ""],
+      [" tpv-struck", ""],
+      ["", '<div class="tpv-side-label">New</div>'],
+    ]);
+    expect(markup.includes("Rendered")).toBe(false);
+  });
+
+  it("applies an atomic plan whole, with no per-row selection", () => {
+    const markup = html(<PlanView plan={{ ...plan, atomic: true }} unstyled onApply={() => {}} />);
+    expect(markup.includes('type="checkbox"')).toBe(false);
+    expect(markup.match(/<span>All (\d+): this plan applies as a whole<\/span>/)?.[1]).toBe("3");
+    expect(markup.includes("Select shown")).toBe(false);
+  });
+
+  it("hides the post and delete filters for a plan without them", () => {
+    const edits: RewritePlan = { thrds_rewrite_plan: 1, actions: [{ kind: "edit", channel: "C1", ts: "1.0", thread_ts: null, hash: "h", old: content("a"), new: content("b"), reason: null }] };
+    const markup = html(<PlanView plan={edits} unstyled />);
+    expect(chips(markup).map((c) => c[0])).toEqual(["edit", "repost", "noop", "skip", "blocked"]);
+    expect(markup.match(/<span class="tpv-summary">([^<]+)<\/span>/)?.[1]).toBe("1 to edit");
+  });
+});

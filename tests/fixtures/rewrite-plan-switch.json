@@ -1,0 +1,198 @@
+{
+  "thrds_rewrite_plan": 1,
+  "delete_after_posts": true,
+  "atomic": true,
+  "actions": [
+    {
+      "kind": "skip",
+      "channel": "C1",
+      "ts": "1.0",
+      "thread_ts": null,
+      "hash": "62d675704788d1af",
+      "old": {
+        "text": "November",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "the OP"
+    },
+    {
+      "kind": "delete",
+      "channel": "C1",
+      "ts": "1.1",
+      "thread_ts": "1.0",
+      "hash": "7267f159df53b54b",
+      "old": {
+        "text": "Nov 1",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "replaced by the weekly replies"
+    },
+    {
+      "kind": "delete",
+      "channel": "C1",
+      "ts": "1.2",
+      "thread_ts": "1.0",
+      "hash": "43a709b157ecb4ab",
+      "old": {
+        "text": "Nov 2",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "replaced by the weekly replies"
+    },
+    {
+      "kind": "delete",
+      "channel": "C1",
+      "ts": "1.3",
+      "thread_ts": "1.0",
+      "hash": "a6bf527c6c517992",
+      "old": {
+        "text": "Nov 3",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "replaced by the weekly replies"
+    },
+    {
+      "kind": "blocked",
+      "channel": "C1",
+      "ts": "1.4",
+      "thread_ts": "1.0",
+      "hash": "6fe087d5224bce8e",
+      "old": {
+        "text": "nice",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": null,
+      "reason": "another app's or a person's message"
+    },
+    {
+      "kind": "post",
+      "channel": "C1",
+      "ts": "wk-1",
+      "thread_ts": "1.0",
+      "hash": "dcb91eb8f54104a7",
+      "old": null,
+      "new": {
+        "text": "Week 1: Nov 1–2",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "post",
+      "channel": "C1",
+      "ts": "wk-2",
+      "thread_ts": "1.0",
+      "hash": "02b5767dfa74ea92",
+      "old": null,
+      "new": {
+        "text": "Week 2: Nov 3",
+        "blocks": null,
+        "sender": {
+          "username": "Digest",
+          "icon_url": null,
+          "icon_emoji": ":bar_chart:"
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "post",
+      "channel": "C1",
+      "ts": "post-47b2a39f396d5d93",
+      "thread_ts": "1.0",
+      "hash": "47b2a39f396d5d93",
+      "old": null,
+      "new": {
+        "text": "Week 3 :soon:",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "post",
+      "channel": "C1",
+      "ts": "post-47b2a39f396d5d93-2",
+      "thread_ts": "1.0",
+      "hash": "47b2a39f396d5d93",
+      "old": null,
+      "new": {
+        "text": "Week 3 :soon:",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null,
+      "broadcast": true
+    },
+    {
+      "kind": "blocked",
+      "channel": "C1",
+      "ts": "long",
+      "thread_ts": null,
+      "hash": "288ccbb82136b8db",
+      "old": null,
+      "new": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": "Message body has a line over Slack's 3000-char section limit (3001 chars)"
+    }
+  ]
+}

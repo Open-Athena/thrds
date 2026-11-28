@@ -1,5 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { describeSender, lineDiff, parsePlan, planCounts, senderChanged, writes, type PlannedAction, type RewriteContent, type RewriteSender } from "../src/index";
+import {
+  applyOrder,
+  describeSender,
+  lineDiff,
+  parsePlan,
+  planCounts,
+  postedOf,
+  senderChanged,
+  writes,
+  writesSummary,
+  type PlannedAction,
+  type RewriteContent,
+  type RewriteSender,
+} from "../src/index";
 
 const noSender: RewriteSender = { username: null, icon_url: null, icon_emoji: null };
 const content = (text: string, sender = noSender): RewriteContent => ({ text, blocks: null, sender, files: [] });
@@ -24,7 +37,7 @@ describe("rewrite plans", () => {
         action("3.0", "noop", content("y"), content("y")),
       ],
     });
-    expect(planCounts(plan)).toEqual({ edit: 1, repost: 0, noop: 1, skip: 0, blocked: 1 });
+    expect(planCounts(plan)).toEqual({ edit: 1, repost: 0, post: 0, delete: 0, noop: 1, skip: 0, blocked: 1 });
     expect(plan.actions.map(writes)).toEqual([true, false, false]);
   });
 
@@ -44,7 +57,7 @@ describe("rewrite plans", () => {
     const digest = { username: "Digest", icon_url: null, icon_emoji: ":bar_chart:" };
     const a = action("1.0", "repost", content("x"), content("x", digest));
     expect(senderChanged(a)).toBe(true);
-    expect([describeSender(a.old.sender), describeSender(digest)]).toEqual(["the app", '"Digest" :bar_chart:']);
+    expect([describeSender(a.old!.sender), describeSender(digest)]).toEqual(["the app", '"Digest" :bar_chart:']);
     expect(senderChanged(action("1.0", "edit", content("x"), content("y")))).toBe(false);
   });
 
@@ -57,5 +70,34 @@ describe("rewrite plans", () => {
       { op: "+", text: "d" },
     ]);
     expect(lineDiff("same", "same")).toEqual([{ op: " ", text: "same" }]);
+  });
+});
+
+describe("post and delete actions", () => {
+  const post = { kind: "post", channel: "C1", ts: "wk-1", thread_ts: "1.0", hash: "h", old: null, new: content("Week 1"), reason: null };
+  const del = { kind: "delete", channel: "C1", ts: "1.1", thread_ts: "1.0", hash: "h", old: content("Nov 1"), new: null, reason: null };
+  const parse = (...actions: unknown[]) => parsePlan({ thrds_rewrite_plan: 1, actions });
+
+  it("parses them, and refuses ones missing their content or sharing an id", () => {
+    expect(parse(del, post).actions.map((a) => [a.ts, a.kind, writes(a)])).toEqual([["1.1", "delete", true], ["wk-1", "post", true]]);
+    expect(() => parse({ ...post, old: content("x") })).toThrow(/^plan action wk-1: a post with old content$/);
+    expect(() => parse({ ...post, new: null })).toThrow(/^plan action wk-1: neither old nor new content$/);
+    expect(() => parse({ ...del, old: null, new: content("x") })).toThrow(/^plan action 1\.1: delete without old content$/);
+    expect(() => parse(post, del, post)).toThrow(/^plan actions share ids: wk-1$/);
+  });
+
+  it("orders deletes last, reads posted ts from outcomes, and summarizes the writes", () => {
+    const edit = { kind: "edit" as const, ts: "2.0" };
+    expect(applyOrder([{ kind: "delete" as const, ts: "1.1" }, edit, { kind: "post" as const, ts: "wk-1" }]).map((a) => a.ts)).toEqual(["2.0", "wk-1", "1.1"]);
+    expect(
+      postedOf([
+        { ts: "wk-1", kind: "post", status: "done", new_ts: "101.0" },
+        { ts: "wk-2", kind: "post", status: "receipt", new_ts: "102.0" },
+        { ts: "wk-3", kind: "post", status: "pending" },
+        { ts: "1.0", kind: "repost", status: "done", new_ts: "103.0" },
+      ]),
+    ).toEqual({ "wk-1": "101.0", "wk-2": "102.0" });
+    expect(writesSummary({ edit: 3, repost: 0, post: 5, delete: 27, noop: 9, skip: 1, blocked: 2 })).toBe("3 to edit · 5 to post · 27 to delete");
+    expect(writesSummary({ edit: 0, repost: 0, post: 0, delete: 0, noop: 9, skip: 1, blocked: 2 })).toBe("");
   });
 });

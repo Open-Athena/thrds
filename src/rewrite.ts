@@ -4,12 +4,14 @@
  * plan either side writes, the other applies.
  *
  * 1. **Find** (`findHistory` / `findThread` / `findIds`): the messages in scope, as `RewriteFound`.
- * 2. **Plan** (`plan(found, render)`): the app's `render(found) -> Desired | Skip` re-derives each message; one action
- *    per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `noop`, `skip` (the app's
- *    reason) or `blocked` (what Slack can't do), each recording the message's content hash.
+ * 2. **Plan** (`plan(found, render, {posts})`): the app's `render(found) -> Desired | Skip | Delete` re-derives each
+ *    message; one action per message: `edit`, `repost` (the sender changes, which `chat.update` can't do), `delete`,
+ *    `noop`, `skip` (the app's reason) or `blocked` (what Slack can't do), each recording the message's content hash.
+ *    New messages are `post` actions, keyed by a plan-assigned key (in `ts`) until they have a ts.
  * 3. **Apply** (`apply(plan, client)`): a dry run unless `dryRun: false`; each action re-reads its message and refuses
- *    it once its hash moved (`stale`). Writes are paced; `receipts` (`memoryReceipts`, `/d1`'s `d1Receipts`) make a
- *    re-run skip what's done.
+ *    it once its hash moved (`stale`). Every `post` runs before any `delete`, and a failed post holds the deletes.
+ *    Writes are paced; `receipts` (`memoryReceipts`, `/d1`'s `d1Receipts`) make a re-run skip what's done, and a real
+ *    run with posts needs them, so a re-run never posts twice.
  *
  * This module is the browser-safe half (types, content hashing, `substitute`, `postRewrite`); the Slack half (find,
  * `plan`, `apply`, `rewriteHandler`) is `./rewrite-slack`, so a page bundling `PlanView` doesn't pull in the client.
@@ -18,7 +20,7 @@ import type { Block } from "./mrkdwn.js";
 
 export const PLAN_VERSION = 1;
 
-export const REWRITE_KINDS = ["edit", "repost", "noop", "skip", "blocked"] as const;
+export const REWRITE_KINDS = ["edit", "repost", "post", "delete", "noop", "skip", "blocked"] as const;
 export type RewriteKind = (typeof REWRITE_KINDS)[number];
 
 export interface RewriteSender {
@@ -38,12 +40,15 @@ export interface RewriteContent {
 export interface PlannedAction {
   kind: RewriteKind;
   channel: string;
+  /** The message's ts; a `post`'s key (it has no ts until posted). */
   ts: string;
   /** The parent's ts for a reply; `null` for a top-level message. */
   thread_ts: string | null;
-  /** The message's content hash when planned; apply refuses the action once it moves. */
+  /** The message's content hash when planned (a post's: its new content's); apply refuses the action once it moves. */
   hash: string;
-  old: RewriteContent;
+  /** `null` for a `post` (and a blocked one). */
+  old: RewriteContent | null;
+  /** `null` for a `delete`. */
   new: RewriteContent | null;
   reason: string | null;
   broadcast?: boolean;
@@ -54,6 +59,11 @@ export interface PlannedAction {
 
 export interface RewritePlan {
   thrds_rewrite_plan: typeof PLAN_VERSION;
+  /** A `delete` runs only once every `post` in the plan is done (this run, or by receipt), across runs and batches.
+   *  Without it, a post that fails in a run holds that run's deletes. */
+  delete_after_posts?: boolean;
+  /** Review applies the plan whole, never a selection of it. */
+  atomic?: boolean;
   actions: PlannedAction[];
   /** Per-kind counts (review form only). */
   counts?: Record<RewriteKind, number>;
@@ -62,7 +72,8 @@ export interface RewritePlan {
 export const REWRITE_STATUSES = ["done", "already", "receipt", "pending", "stale", "gone", "failed", "undeleted"] as const;
 export type RewriteStatus = (typeof REWRITE_STATUSES)[number];
 
-/** One applied (or dry-run) action's result. */
+/** One applied (or dry-run) action's result: `ts` is the action's (a post's key), `new_ts` what a post / repost
+ *  posted. A real run's `pending` is a delete held by a post not done (see `error`). */
 export interface RewriteOutcome {
   ts: string;
   kind: RewriteKind;
@@ -79,15 +90,55 @@ export function parsePlan(json: unknown): RewritePlan {
     throw new Error(`not a thrds rewrite plan (version ${JSON.stringify(plan.thrds_rewrite_plan)}, expected ${PLAN_VERSION})`);
   }
   if (!Array.isArray(plan.actions)) throw new Error("not a thrds rewrite plan (no actions)");
+  const seen = new Set<string>();
+  const dupes = new Set<string>();
   for (const a of plan.actions) {
     if (!(REWRITE_KINDS as readonly string[]).includes(a.kind)) throw new Error(`plan action ${a.ts}: unknown kind ${JSON.stringify(a.kind)}`);
-    if (writes(a) && a.new === null) throw new Error(`plan action ${a.ts}: ${a.kind} without new content`);
+    const old = a.old ?? null;
+    const next = a.new ?? null;
+    if (old === null && next === null) throw new Error(`plan action ${a.ts}: neither old nor new content`);
+    if (a.kind === "post" && old !== null) throw new Error(`plan action ${a.ts}: a post with old content`);
+    if ((a.kind === "edit" || a.kind === "repost" || a.kind === "delete") && old === null) {
+      throw new Error(`plan action ${a.ts}: ${a.kind} without old content`);
+    }
+    if ((a.kind === "edit" || a.kind === "repost" || a.kind === "post") && next === null) {
+      throw new Error(`plan action ${a.ts}: ${a.kind} without new content`);
+    }
+    if (seen.has(a.ts)) dupes.add(a.ts);
+    seen.add(a.ts);
   }
+  if (dupes.size > 0) throw new Error(`plan actions share ids: ${[...dupes].sort().join(", ")}`);
   return plan as RewritePlan;
 }
 
-/** `edit` and `repost` write; the other kinds don't. */
-export const writes = (a: Pick<PlannedAction, "kind">): boolean => a.kind === "edit" || a.kind === "repost";
+/** `edit`, `repost`, `post` and `delete` write; the other kinds don't. */
+export const writes = (a: Pick<PlannedAction, "kind">): boolean =>
+  a.kind === "edit" || a.kind === "repost" || a.kind === "post" || a.kind === "delete";
+
+/** `actions` in the order `apply` runs them: the given order, with every `delete` moved after the rest. A review page
+ *  sends its selection in this order (in batches, too), so no delete goes before a post. */
+export const applyOrder = <A extends Pick<PlannedAction, "kind">>(actions: Iterable<A>): A[] => {
+  const all = [...actions];
+  return [...all.filter((a) => a.kind !== "delete"), ...all.filter((a) => a.kind === "delete")];
+};
+
+/** Each post's key → its ts, for posts done now or by an earlier run (so the app can record them). */
+export function postedOf(outcomes: Iterable<RewriteOutcome>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const o of outcomes) {
+    if (o.kind === "post" && o.new_ts !== undefined && (o.status === "done" || o.status === "receipt")) out[o.ts] = o.new_ts;
+  }
+  return out;
+}
+
+const TO_DO: Partial<Record<RewriteKind, string>> = { edit: "to edit", repost: "to repost", post: "to post", delete: "to delete" };
+
+/** The writes' counts, as a review header reads them: "3 to edit · 5 to post · 27 to delete" (`""` for none). */
+export function writesSummary(counts: Record<RewriteKind, number>): string {
+  return REWRITE_KINDS.filter((k) => TO_DO[k] !== undefined && counts[k] > 0)
+    .map((k) => `${counts[k]} ${TO_DO[k]}`)
+    .join(" · ");
+}
 
 export function planCounts(plan: RewritePlan): Record<RewriteKind, number> {
   const out = Object.fromEntries(REWRITE_KINDS.map((k) => [k, 0])) as Record<RewriteKind, number>;
@@ -97,6 +148,7 @@ export function planCounts(plan: RewritePlan): Record<RewriteKind, number> {
 
 export const senderChanged = (a: PlannedAction): boolean =>
   a.new !== null &&
+  a.old !== null &&
   (a.new.sender.username !== a.old.sender.username ||
     a.new.sender.icon_url !== a.old.sender.icon_url ||
     a.new.sender.icon_emoji !== a.old.sender.icon_emoji);
@@ -306,16 +358,38 @@ export interface Skip {
   skip: string;
 }
 
-export type Render = (found: RewriteFound) => Desired | Skip | Promise<Desired | Skip>;
+/** The app wants this message gone (`reason`: why, for review). */
+export interface Delete {
+  delete: true;
+  reason?: string | null;
+}
+
+export type Render = (found: RewriteFound) => Desired | Skip | Delete | Promise<Desired | Skip | Delete>;
+
+/** A new message for the plan to post: `desired` into `channel` (a reply when `threadTs` is set). `key` names it until
+ *  it has a ts (in `only`, receipts and `postedOf`); default `post-<hash of its content>` (`-2`, `-3`… for repeats), so
+ *  a re-plan of the same content keeps it. Not ts-shaped, and unique within the plan. Python's `Post`. */
+export interface RewritePost {
+  channel: string;
+  threadTs: string | null;
+  desired: Desired;
+  key?: string;
+  broadcast?: boolean;
+  metadata?: unknown;
+}
 
 export const isOverride = (s: RewriteSender): boolean => s.username !== null || s.icon_url !== null || s.icon_emoji !== null;
 
-/** `parsePlan`, then each action's recorded hash checked against its old content (as Python's `Plan.from_json`). */
+/** The content an action's `hash` covers: its old content, or a post's new content. */
+export const hashedContent = (a: Pick<PlannedAction, "old" | "new">): RewriteContent => (a.old ?? a.new)!;
+
+/** `parsePlan`, then each action's recorded hash checked against its old content (a post's: its new content), as
+ *  Python's `Plan.from_json`. */
 export async function verifyPlan(json: unknown): Promise<RewritePlan> {
   const p = parsePlan(json);
   for (const a of p.actions) {
-    const h = await contentHash(a.old);
-    if (a.hash !== h) throw new Error(`plan action ${a.ts}: recorded hash ${a.hash} doesn't match its old content (${h})`);
+    const h = await contentHash(hashedContent(a));
+    if (a.hash !== h) throw new Error(`plan action ${a.ts}: recorded hash ${a.hash} doesn't match its ${a.old === null ? "new" : "old"} content (${h})`);
   }
   return p;
 }
@@ -324,8 +398,8 @@ export async function verifyPlan(json: unknown): Promise<RewritePlan> {
 
 /** Where outcomes of real runs go, so a re-run skips what's `done` / `already`. */
 export interface RewriteReceipts {
-  /** The ts already `done` or `already`. */
-  done(): Promise<Set<string>>;
+  /** The ids (a message's ts, a post's key) already `done` or `already` → the ts each posted (`null`: none). */
+  done(): Promise<Map<string, string | null>>;
   record(o: RewriteOutcome): Promise<void>;
 }
 
@@ -335,7 +409,7 @@ export function memoryReceipts(initial: RewriteOutcome[] = []): RewriteReceipts 
   return {
     outcomes,
     async done() {
-      return new Set(outcomes.filter((o) => o.status === "done" || o.status === "already").map((o) => o.ts));
+      return new Map(outcomes.filter((o) => o.status === "done" || o.status === "already").map((o) => [o.ts, o.new_ts ?? null]));
     },
     async record(o) {
       outcomes.push(o);
@@ -380,14 +454,15 @@ export function substitute(mapping: Record<string, string>): Render {
 
 // --- serving ------------------------------------------------------------
 
-/** How many actions one `check` / `apply` request takes: each is 2–5 Slack calls, and a Worker request has a
+/** How many actions one `check` / `apply` request takes (posts and deletes count): each is 1–5 Slack calls, and a Worker request has a
  *  subrequest cap (50 free, 1000 paid). `postRewrite` batches to it. */
 export const DEFAULT_BATCH = 10;
 
 /**
  * The page's side of `rewriteHandler` (or `slck rewrite review`): POST `ids` to `endpoint` (`…/check` or `…/apply`)
  * `batch` at a time, in order, calling `onOutcomes` after each batch; resolves to every outcome. Throws on the first
- * refused batch (what was applied before it stays applied, and its receipts say so).
+ * refused batch (what was applied before it stays applied, and its receipts say so). Pass the ids in `applyOrder`, so
+ * no batch of deletes goes before a batch with posts.
  */
 export async function postRewrite(
   endpoint: string,

@@ -325,8 +325,9 @@ await apply(p, client, { dryRun: false, receipts: memoryReceipts() });
 
 - **Find:** `findHistory` (newest first; `oldest` / `latest`, `includeReplies`), `findThread`, `findIds`. Only this token's own posts, unless `includeForeign` (they plan as `blocked`).
 - **Plan:** `render(found)` returns `{ text, blocks?, sender? }` or `{ skip: reason }`; `substitute({ ":old:": ":new:" })` is a ready-made one. Each message gets one action: `edit`, `repost` (a sender change, which `chat.update` can't make: a post, then a delete), `noop`, `skip` or `blocked` (a repost that would orphan replies, move the message, or drop its files; someone else's message; text Slack can't take).
+- **Posts and deletes:** `render` may return `{ delete: true, reason? }` (`blocked` for a message with replies), and `plan(found, render, { posts })` adds a `post` per `{ channel, threadTs, desired, key? }`: new messages, for changes that aren't 1:1 (e.g. a thread's replies switched to another style). A post's `ts` in the plan is its key (the app's, or `post-<content hash>`) until it has one. `deleteAfterPosts` and `atomic` mark the plan (below).
 - **Long text:** text over 4,000 chars is planned as Python's `post` / `edit` send it (`sendable`): beside blocks it becomes the notification fallback cut at a line (`fallbackText`), and text-only it goes out as `sectionBlocks(text, { lines: true })` (at most 3,000 chars each, split at blank lines, then at line breaks) with that fallback. It's `blocked` only for a line over 3,000 chars or more than 50 sections. Lengths count code points, as Python does.
-- **Apply:** each action re-reads its message and refuses it once its content hash moved (`stale`). Writes are 1.2 s apart. A repost posts before it deletes, so a failure leaves a duplicate (`undeleted`), never a loss. `receipts` (`memoryReceipts`, or `d1Receipts(db, planId)` from `/d1`, table `rewriteReceiptsSchema()`) make a re-run skip what's done.
+- **Apply:** each action re-reads its message and refuses it once its content hash moved (`stale`). Writes are 1.2 s apart. A repost posts before it deletes, so a failure leaves a duplicate (`undeleted`), never a loss. Likewise every `post` runs before any `delete` (`applyOrder`), and a post that fails holds the run's deletes (`pending`, with the reason); with `delete_after_posts` a delete waits until every post in the plan is done, across runs and batches. `receipts` (`memoryReceipts`, or `d1Receipts(db, planId)` from `/d1`, table `rewriteReceiptsSchema()`) make a re-run skip what's done, and keep each post's ts; a real run with posts needs them, so a re-run never posts twice. `postedOf(outcomes)` maps each post's key to its ts, for the app's own state.
 
 **Same content** (`noop` when planning, `already` when applying; `sameContent`) is compared as Slack stores a message. `&amp;` `&lt;` `&gt;` equal `&` `<` `>`, in the text and in every block string. With blocks, the blocks are what renders, and the text is only the notification fallback, so its runs of whitespace don't count but its words do. Without blocks the text must match. Also ignored: block ids, the size fields Slack adds to an image block, and a mrkdwn text's default `verbatim: false` or a plain_text's default `emoji: true`.
 
@@ -347,7 +348,7 @@ export const onRequest = async ({ request, env }) =>
   });
 ```
 
-`GET …/plan` returns `{path, plan}`; `POST …/check` and `…/apply` take `{ids}` and return `{outcomes}` (a dry run for `check`). A POST must be JSON and same-origin, and the ids must be the plan's edits or reposts, at most 10 per request (`maxBatch`): each is a few Slack calls, under a Worker request's subrequest cap. The page's side, `postRewrite`, sends a selection in batches of 10 and reports each batch's outcomes as they land:
+`GET …/plan` returns `{path, plan}`; `POST …/check` and `…/apply` take `{ids}` and return `{outcomes, posted}` (a dry run for `check`). A POST must be JSON and same-origin, and the ids must be the plan's writes (a message's ts, a post's key), at most 10 per request (`maxBatch`): each is a few Slack calls, under a Worker request's subrequest cap. The page's side, `postRewrite`, sends a selection in batches of 10 and reports each batch's outcomes as they land:
 
 ```tsx
 import { postRewrite } from "@open-athena/thrds";
@@ -365,7 +366,8 @@ import { PlanView } from "@open-athena/thrds/plan-view";
 
 - **Filters:** by kind (all but `noop` at first) and by text or ts.
 - **Each row:** the message before and after, rendered as Slack would, or by `renderContent` when it returns something; a text diff; the sender change; and the outcome.
-- **Selection:** edits and reposts are selectable. `Apply` asks for confirmation inside the view before calling `onApply`.
+- **Posts and deletes:** a post shows only its new message, a delete only the old one, struck; the header counts the writes ("5 to post · 27 to delete").
+- **Selection:** writes are selectable, and go to `onCheck` / `onApply` in `applyOrder` (deletes last), so batches never delete before they post. An `atomic` plan has no per-row selection: it applies whole. `Apply` asks for confirmation inside the view before calling `onApply`, naming how many deletes can't be undone.
 - **Styling:** `PLAN_VIEW_CSS`, `tpv-` classes, light and dark. Pass `unstyled` to style the classes yourself.
 
 `slck rewrite review plan.json` serves the same view standalone on localhost. Its bundle is built here with `pnpm build:review` into `dist/review/`, and the Python package vendors it.

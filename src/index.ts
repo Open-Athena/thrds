@@ -159,6 +159,7 @@ export {
   upsertFiles,
 } from "./slots";
 export type {
+  Delete,
   Desired,
   DiffLine,
   PlannedAction,
@@ -169,6 +170,7 @@ export type {
   RewriteKind,
   RewriteOutcome,
   RewritePlan,
+  RewritePost,
   RewriteReceipts,
   RewriteSender,
   RewriteStatus,
@@ -180,6 +182,7 @@ export {
   PLAN_VERSION,
   REWRITE_KINDS,
   REWRITE_STATUSES,
+  applyOrder,
   contentHash,
   contentOf,
   describeSender,
@@ -188,6 +191,7 @@ export {
   parsePlan,
   planCounts,
   postRewrite,
+  postedOf,
   pyJsonDumps,
   sameContent,
   senderChanged,
@@ -195,6 +199,7 @@ export {
   substitute,
   verifyPlan,
   writes,
+  writesSummary,
 } from "./rewrite";
-export type { ApplyOptions, FindOptions, RewriteHandlerOptions } from "./rewrite-slack";
+export type { ApplyOptions, FindOptions, PlanOptions, RewriteHandlerOptions } from "./rewrite-slack";
 export { apply, findHistory, findIds, findThread, plan, readMessage, rewriteHandler, sendable } from "./rewrite-slack";
