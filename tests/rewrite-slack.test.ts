@@ -12,8 +12,11 @@ import {
   memoryReceipts,
   plan,
   postRewrite,
+  fallbackText,
   rewriteHandler,
   sameContent,
+  sectionBlocks,
+  sendable,
   substitute,
   verifyPlan,
   type Desired,
@@ -51,6 +54,17 @@ const channel = (more: FakeMessage[] = []) =>
     ],
   });
 
+// Two paragraphs of 30 lines × 70 chars: 4,260 chars, over the 4,000 on `text`; each paragraph fits a section
+// (`LONG` in Python's `tests/test_rewrite.py`).
+const LONG_ROWS = Array.from({ length: 60 }, (_, i) => `${String(i).padStart(2, "0")} ${"p".repeat(67)}`);
+const LONG = `${LONG_ROWS.slice(0, 30).join("\n")}\n\n${LONG_ROWS.slice(30).join("\n")}`;
+const section = (text: string) => ({ type: "section", text: { type: "mrkdwn", text } });
+const LONG_SECTIONS = [section(LONG_ROWS.slice(0, 30).join("\n")), section(LONG_ROWS.slice(30).join("\n"))];
+const LONG_FALLBACK = `${LONG_ROWS.slice(0, 30).join("\n")}\n\n${LONG_ROWS.slice(30, 56).join("\n")}\n…`;
+const LONG_IMAGE = { type: "image", image_url: "https://example.com/plot.png", alt_text: "plot" };
+const LONG_MANY = Array.from({ length: 51 }, () => "q".repeat(2999)).join("\n\n");
+const LONG_LINE = `${"x".repeat(3001)}\n${"y".repeat(1500)}`;
+
 const view = (fs: RewriteFound[]) => fs.map((f) => [f.ts, f.threadTs, f.ours, f.last, f.replyCount]);
 const kinds = (p: RewritePlan) => p.actions.map((a) => [a.ts, a.kind, a.reason]);
 const statuses = (os: Array<{ ts: string; status: string }>) => os.map((o) => [o.ts, o.status]);
@@ -75,22 +89,94 @@ describe("parity with Python thrds.rewrite", () => {
         ours("4.0", "fallback :old:", { blocks: [{ block_id: "s0", ...SECTION }] }),
         theirs("5.0", "a person :old:"),
         ours("6.0", "card :old:", { metadata: { event_type: "fleet", event_payload: { id: 1 } } }),
+        ours("7.0", "short"),
+        ours("7.1", "short"),
+        ours("7.2", "short"),
       ],
     });
+    const long: Record<string, Desired> = {
+      "7.0": { text: LONG },
+      "7.1": { text: LONG, blocks: [...LONG_SECTIONS, LONG_IMAGE] },
+      "7.2": { text: LONG_LINE },
+    };
     const render = (f: RewriteFound): Desired | Skip => {
+      if (f.ts in long) return long[f.ts]!;
       const d = sub(f) as Desired;
       return f.ts === "6.0" ? { ...d, sender: DIGEST } : d;
     };
     expect(await plan(await findHistory(client, { includeReplies: true, includeForeign: true }), render)).toEqual(verified);
 
     const tampered = structuredClone(py) as RewritePlan;
-    tampered.actions[1]!.old.text = "edited by hand";
+    tampered.actions.find((a) => a.ts === "5.0")!.old.text = "edited by hand";
     await expect(verifyPlan(tampered)).rejects.toThrow(/^plan action 5\.0: recorded hash \w+ doesn't match its old content \(\w+\)$/);
   });
 
   it("compares content as Python's `same_content` does", () => {
     const cases = fixture("rewrite-same.json") as Array<{ live: RewriteContent; want: RewriteContent; same: boolean }>;
     expect(cases.map((c) => sameContent(c.live, c.want))).toEqual(cases.map((c) => c.same));
+  });
+});
+
+describe("text over Slack's 4,000, as Python's `post` / `edit` send it", () => {
+  it("caps the fallback text at a line", () => {
+    expect(fallbackText("short")).toBe("short");
+    expect(fallbackText("x".repeat(4000))).toBe("x".repeat(4000));
+    expect([fallbackText(LONG), fallbackText(LONG).length]).toEqual([LONG_FALLBACK, 3978]);
+    expect(fallbackText("y".repeat(5000))).toBe(`${"y".repeat(3999)}…`);
+    // Counted in code points, as Python counts: 4,000 emoji fit.
+    expect(fallbackText("🚀".repeat(4000))).toBe("🚀".repeat(4000));
+  });
+
+  it("splits sections at paragraphs, or with `lines` at line breaks", () => {
+    const rows = Array.from({ length: 40 }, (_, i) => `${String(i).padStart(2, "0")}${"r".repeat(97)}`);
+    const para = rows.join("\n");
+    expect(() => sectionBlocks(para)).toThrow(
+      /^Message body has a paragraph over Slack's 3000-char section limit \(3999 chars\); break it with a blank line or shorten it$/,
+    );
+    const head = "h".repeat(100);
+    const tail = "t".repeat(100);
+    expect(sectionBlocks([head, para, tail].join("\n\n"), { lines: true })).toEqual([
+      section(head),
+      section(rows.slice(0, 30).join("\n")),
+      section(`${rows.slice(30).join("\n")}\n\n${tail}`),
+    ]);
+    expect(sectionBlocks(LONG)).toEqual(LONG_SECTIONS);
+    expect(() => sectionBlocks(`ok\n${"x".repeat(3001)}`, { lines: true })).toThrow(
+      /^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$/,
+    );
+  });
+
+  it("`sendable`: capped beside blocks, sections when text-only", () => {
+    expect(sendable("short", null)).toEqual({ text: "short", blocks: null });
+    expect(sendable(LONG, [...LONG_SECTIONS, LONG_IMAGE])).toEqual({ text: LONG_FALLBACK, blocks: [...LONG_SECTIONS, LONG_IMAGE] });
+    expect(sendable(LONG, null)).toEqual({ text: LONG_FALLBACK, blocks: LONG_SECTIONS });
+    expect(() => sendable(LONG_LINE, null)).toThrow(/^Message body has a line over Slack's 3000-char section limit \(3001 chars\)$/);
+    expect(() => sendable(LONG_MANY, null)).toThrow(/^new text is 153049 chars, 51 sections over Slack's 50 blocks$/);
+  });
+
+  it("plans a message already sent that way as a noop, and edits one that isn't", async () => {
+    const { client, calls } = fakeChannel({
+      messages: [
+        ours("1.0", LONG_FALLBACK, { blocks: [...LONG_SECTIONS, LONG_IMAGE].map((b, i) => ({ block_id: `b${i}`, ...b })) }),
+        ours("2.0", "short"),
+        ours("3.0", "short"),
+      ],
+    });
+    const want: Record<string, Desired> = {
+      "1.0": { text: LONG, blocks: [...LONG_SECTIONS, LONG_IMAGE] },
+      "2.0": { text: LONG },
+      "3.0": { text: LONG_MANY },
+    };
+    const p = await plan(await findIds(client, ["1.0", "2.0", "3.0"]), (f) => want[f.ts]!);
+    expect(kinds(p)).toEqual([
+      ["1.0", "noop", null],
+      ["2.0", "edit", null],
+      ["3.0", "blocked", "new text is 153049 chars, 51 sections over Slack's 50 blocks"],
+    ]);
+    expect(p.actions[1]!.new).toEqual({ text: LONG_FALLBACK, blocks: LONG_SECTIONS, sender: p.actions[1]!.old.sender, files: [] });
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["2.0", "done"]]);
+    expect(chatCalls(calls)).toEqual([["chat.update", { channel: "C1", ts: "2.0", text: LONG_FALLBACK, blocks: LONG_SECTIONS }]]);
+    expect(statuses(await apply(p, client, { dryRun: false, paceMs: 0 }))).toEqual([["2.0", "already"]]);
   });
 });
 

@@ -40,6 +40,7 @@ export type {
   FileSwap,
   FilesSwap,
   SenderOverrides,
+  SectionBlock,
   SlackUser,
   UploadData,
   UploadOptions,
@@ -54,12 +55,17 @@ export {
   FilesNotAttachedError,
   MAX_CACHED_USERS,
   NOT_FOUND_TTL_MS,
+  SLACK_BLOCKS_LIMIT,
   SLACK_MESSAGE_LIMIT,
+  SLACK_SECTION_LIMIT,
   SlackClient,
   USERNAME_MAX,
   USER_TTL_MS,
+  codePoints,
   definitelyNotAttached,
+  fallbackText,
   isProcessed,
+  sectionBlocks,
   FILE_HASHES,
   attachedFiles,
   swapFiles,
@@ -191,4 +197,4 @@ export {
   writes,
 } from "./rewrite";
 export type { ApplyOptions, FindOptions, RewriteHandlerOptions } from "./rewrite-slack";
-export { apply, findHistory, findIds, findThread, plan, readMessage, rewriteHandler } from "./rewrite-slack";
+export { apply, findHistory, findIds, findThread, plan, readMessage, rewriteHandler, sendable } from "./rewrite-slack";

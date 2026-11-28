@@ -37,6 +37,69 @@ import {
 } from "./linked";
 
 export const SLACK_MESSAGE_LIMIT = 4000;
+/** A `section` block's text maxes out at 3,000 chars, below the 4,000 on a message's `text`. */
+export const SLACK_SECTION_LIMIT = 3000;
+/** Blocks per message. */
+export const SLACK_BLOCKS_LIMIT = 50;
+
+/** Length in code points, as Python counts it (`len`), so both sides cut and cap at the same places. */
+export const codePoints = (s: string): number => {
+  let n = 0;
+  for (const _ of s) n++;
+  return n;
+};
+
+export type SectionBlock = {
+  type: "section";
+  text: { type: "mrkdwn"; text: string };
+};
+
+/**
+ * `text` (wire mrkdwn) as `section` blocks of at most `SLACK_SECTION_LIMIT` chars each: one block when it fits, else
+ * split at paragraph breaks (blank lines), each block holding whole paragraphs. A paragraph over the limit throws,
+ * or with `lines` splits at its line breaks, each block holding whole lines (that split reads back with a blank line
+ * where it fell). A single line over the limit throws. Python's `thrds.slack.section_blocks`.
+ */
+export function sectionBlocks(text: string, options: { lines?: boolean } = {}): SectionBlock[] {
+  const chunks: string[] = [];
+  const pack = (piece: string, sep: string, out: string[]) => {
+    const last = out.length - 1;
+    if (last >= 0 && codePoints(out[last]!) + sep.length + codePoints(piece) <= SLACK_SECTION_LIMIT) out[last] += sep + piece;
+    else out.push(piece);
+  };
+  for (const para of text.split("\n\n")) {
+    const n = codePoints(para);
+    if (n <= SLACK_SECTION_LIMIT) {
+      pack(para, "\n\n", chunks);
+      continue;
+    }
+    if (!options.lines) {
+      throw new Error(`Message body has a paragraph over Slack's ${SLACK_SECTION_LIMIT}-char section limit (${n} chars); break it with a blank line or shorten it`);
+    }
+    const lines: string[] = [];
+    for (const line of para.split("\n")) {
+      const m = codePoints(line);
+      if (m > SLACK_SECTION_LIMIT) throw new Error(`Message body has a line over Slack's ${SLACK_SECTION_LIMIT}-char section limit (${m} chars)`);
+      pack(line, "\n", lines);
+    }
+    chunks.push(...lines);
+  }
+  return chunks.map((c) => ({ type: "section", text: { type: "mrkdwn", text: c } }));
+}
+
+/**
+ * `wire` as a block message's top-level `text`, within `SLACK_MESSAGE_LIMIT`. Slack rejects `text` over 4,000 chars
+ * (`msg_too_long`) even beside blocks, where it's only the notification fallback: a longer one is cut at the last line
+ * break that leaves room for a trailing `…` (a single line over the cap is cut within it). Python's
+ * `thrds.slack.fallback_text`.
+ */
+export function fallbackText(wire: string): string {
+  const cps = Array.from(wire);
+  if (cps.length <= SLACK_MESSAGE_LIMIT) return wire;
+  const cut = cps.lastIndexOf("\n", SLACK_MESSAGE_LIMIT - 2);
+  if (cut > 0) return cps.slice(0, cut).join("") + "\n…";
+  return cps.slice(0, SLACK_MESSAGE_LIMIT - 1).join("") + "…";
+}
 
 /** Slack shows at most 80 characters of a `username` override. */
 export const USERNAME_MAX = 80;

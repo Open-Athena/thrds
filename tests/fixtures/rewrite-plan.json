@@ -2,7 +2,126 @@
   "thrds_rewrite_plan": 1,
   "actions": [
     {
-      "kind": "repost",
+      "kind": "blocked",
+      "channel": "C1",
+      "ts": "7.2",
+      "thread_ts": null,
+      "hash": "9eb9038fa2f2a4b3",
+      "old": {
+        "text": "short",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx\nyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": "Message body has a line over Slack's 3000-char section limit (3001 chars)"
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "7.1",
+      "thread_ts": null,
+      "hash": "9eb9038fa2f2a4b3",
+      "old": {
+        "text": "short",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "00 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n01 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n02 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n03 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n04 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n05 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n06 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n07 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n08 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n09 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n10 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n11 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n12 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n13 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n14 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n15 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n16 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n17 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n18 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n19 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n20 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n21 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n22 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n23 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n24 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n25 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n26 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n27 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n28 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n29 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n\n30 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n31 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n32 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n33 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n34 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n35 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n36 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n37 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n38 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n39 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n40 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n41 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n42 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n43 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n44 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n45 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n46 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n47 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n48 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n49 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n50 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n51 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n52 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n53 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n54 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n55 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n…",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "00 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n01 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n02 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n03 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n04 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n05 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n06 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n07 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n08 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n09 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n10 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n11 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n12 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n13 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n14 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n15 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n16 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n17 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n18 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n19 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n20 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n21 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n22 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n23 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n24 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n25 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n26 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n27 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n28 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n29 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "30 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n31 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n32 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n33 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n34 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n35 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n36 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n37 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n38 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n39 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n40 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n41 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n42 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n43 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n44 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n45 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n46 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n47 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n48 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n49 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n50 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n51 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n52 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n53 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n54 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n55 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n56 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n57 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n58 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n59 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+            }
+          },
+          {
+            "type": "image",
+            "image_url": "https://example.com/plot.png",
+            "alt_text": "plot"
+          }
+        ],
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "edit",
+      "channel": "C1",
+      "ts": "7.0",
+      "thread_ts": null,
+      "hash": "9eb9038fa2f2a4b3",
+      "old": {
+        "text": "short",
+        "blocks": null,
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "new": {
+        "text": "00 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n01 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n02 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n03 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n04 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n05 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n06 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n07 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n08 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n09 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n10 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n11 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n12 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n13 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n14 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n15 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n16 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n17 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n18 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n19 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n20 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n21 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n22 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n23 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n24 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n25 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n26 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n27 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n28 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n29 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n\n30 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n31 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n32 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n33 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n34 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n35 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n36 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n37 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n38 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n39 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n40 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n41 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n42 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n43 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n44 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n45 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n46 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n47 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n48 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n49 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n50 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n51 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n52 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n53 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n54 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n55 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n…",
+        "blocks": [
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "00 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n01 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n02 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n03 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n04 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n05 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n06 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n07 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n08 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n09 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n10 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n11 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n12 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n13 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n14 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n15 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n16 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n17 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n18 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n19 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n20 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n21 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n22 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n23 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n24 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n25 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n26 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n27 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n28 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n29 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+            }
+          },
+          {
+            "type": "section",
+            "text": {
+              "type": "mrkdwn",
+              "text": "30 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n31 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n32 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n33 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n34 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n35 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n36 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n37 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n38 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n39 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n40 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n41 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n42 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n43 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n44 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n45 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n46 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n47 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n48 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n49 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n50 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n51 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n52 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n53 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n54 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n55 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n56 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n57 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n58 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp\n59 ppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppppp"
+            }
+          }
+        ],
+        "sender": {
+          "username": null,
+          "icon_url": null,
+          "icon_emoji": null
+        },
+        "files": []
+      },
+      "reason": null
+    },
+    {
+      "kind": "blocked",
       "channel": "C1",
       "ts": "6.0",
       "thread_ts": null,
@@ -27,13 +146,7 @@
         },
         "files": []
       },
-      "reason": null,
-      "metadata": {
-        "event_type": "fleet",
-        "event_payload": {
-          "id": 1
-        }
-      }
+      "reason": "the sender changes, and a repost would move it to the end of its channel"
     },
     {
       "kind": "blocked",

@@ -3,6 +3,7 @@
  * Worker / Pages Function (`rewriteHandler`). Types and content helpers: `./rewrite`.
  */
 import { SlackApiError } from "./api.js";
+import type { Block } from "./mrkdwn.js";
 import {
   DEFAULT_BATCH,
   DEFAULT_PACE_MS,
@@ -28,7 +29,24 @@ import {
   type RewriteReceipts,
   type RewriteStatus,
 } from "./rewrite.js";
-import { SLACK_MESSAGE_LIMIT, type SlackClient } from "./slack.js";
+import { SLACK_BLOCKS_LIMIT, SLACK_MESSAGE_LIMIT, codePoints, fallbackText, sectionBlocks, type SlackClient } from "./slack.js";
+
+/**
+ * A rendered `text` / `blocks` as Python's `SlackClient.post` / `edit` send it, under Slack's 4,000 on `text`. Text
+ * over `SLACK_MESSAGE_LIMIT` beside blocks becomes its `fallbackText`; text-only over it goes out as
+ * `sectionBlocks(text, { lines: true })` with that fallback. Throws when Slack can't take it: a line over the section
+ * limit, or more than `SLACK_BLOCKS_LIMIT` blocks. Python's `thrds.rewrite.sendable`.
+ */
+export function sendable(text: string, blocks: Block[] | null): { text: string; blocks: Block[] | null } {
+  const n = codePoints(text);
+  if (n <= SLACK_MESSAGE_LIMIT) return { text, blocks };
+  if (blocks !== null && blocks.length > 0) return { text: fallbackText(text), blocks };
+  const sections = sectionBlocks(text, { lines: true });
+  if (sections.length > SLACK_BLOCKS_LIMIT) {
+    throw new Error(`new text is ${n} chars, ${sections.length} sections over Slack's ${SLACK_BLOCKS_LIMIT} blocks`);
+  }
+  return { text: fallbackText(text), blocks: sections };
+}
 
 // --- find ---------------------------------------------------------------
 
@@ -193,18 +211,18 @@ export async function plan(
       actions.push(action("skip", { reason: r.skip }));
       continue;
     }
-    const next: RewriteContent = {
-      text: r.text,
-      blocks: r.blocks ?? null,
-      sender: r.sender ?? f.content.sender,
-      files: f.content.files,
-    };
-    if (sameContent(f.content, next)) {
-      actions.push(action("noop", { new: next }));
+    const sender = r.sender ?? f.content.sender;
+    let sent: { text: string; blocks: Block[] | null };
+    try {
+      sent = sendable(r.text, r.blocks ?? null);
+    } catch (e) {
+      const asRendered: RewriteContent = { text: r.text, blocks: r.blocks ?? null, sender, files: f.content.files };
+      actions.push(action("blocked", { new: asRendered, reason: (e as Error).message }));
       continue;
     }
-    if (next.text.length > SLACK_MESSAGE_LIMIT) {
-      actions.push(action("blocked", { new: next, reason: `new text is ${next.text.length} chars, over ${SLACK_MESSAGE_LIMIT}` }));
+    const next: RewriteContent = { ...sent, sender, files: f.content.files };
+    if (sameContent(f.content, next)) {
+      actions.push(action("noop", { new: next }));
       continue;
     }
     if (sameSender(next.sender, f.content.sender)) {
