@@ -22,7 +22,7 @@ Slack, Discord, and Mastodon clients use only stdlib (`urllib`) and a `curl` sub
 
 One session per `.md` file, living in `<git-root-or-cwd>/<platform>/<slug>/` with its own private git repo and (by default) a secret gist mirror. Every state-mutating verb auto-commits and pushes to the gist, so the doc's iteration history is the artifact you keep.
 
-Every platform group shares one sync model, borrowed wholesale from git: a remote-tracking ref per remote under `refs/remotes/<name>`, `fetch` to observe it, `pull -m rebase|merge|overwrite` to reconcile, and a `push` that refuses a non-fast-forward. See [`specs/remotes-model.md`](specs/remotes-model.md).
+The Slack and GitHub groups share one sync model, borrowed wholesale from git: a remote-tracking ref per remote under `refs/remotes/<name>`, `fetch` to observe it, `pull -m rebase|merge|overwrite` to reconcile, and a `push` that refuses a non-fast-forward. Discord, Bluesky and Mastodon don't have `fetch` / `pull` yet. See [`specs/remotes-model.md`](specs/remotes-model.md).
 
 Each session's `platform` is stamped into `thrds.yml` at init and guarded on every verb — `thrds slack push` inside a capture session errors immediately rather than failing halfway.
 

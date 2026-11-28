@@ -402,7 +402,7 @@ class SyncOptions:
     # This is how `promote` scopes a sync to the messages *it* posted in a
     # shared thread — same-author messages from other slugs or manual posts
     # are ours to Slack but not ours to converge (see
-    # specs/promote-shared-thread-safety.md). None = no restriction.
+    # specs/done/promote-shared-thread-safety.md). None = no restriction.
     only_ids: set[str] | None = None
 
 

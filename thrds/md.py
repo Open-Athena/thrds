@@ -2,7 +2,7 @@
 
 Two layouts share this module:
 
-- **per-thread files** (current; see ``specs/per-thread-model.md``) — one
+- **per-thread files** (current; see ``specs/done/per-thread-model.md``) — one
   ``NN-slug.md`` per thread, parsed by :func:`parse_thread` /
   :func:`serialize_thread`. The slug comes from the filename; ``+++``
   separates replies; ``===`` is rejected.

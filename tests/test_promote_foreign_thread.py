@@ -1,6 +1,6 @@
 """Regression tests for the 2026-08-19 promote incident.
 
-See ``specs/promote-shared-thread-safety.md``: promoting into an existing
+See ``specs/done/promote-shared-thread-safety.md``: promoting into an existing
 (someone else's) thread must be append-only on first promote — it may not
 edit or delete *any* message already in the thread, including ones posted
 with our own token (earlier-promoted slugs, manual posts). Converging those

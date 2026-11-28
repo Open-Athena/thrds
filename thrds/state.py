@@ -9,7 +9,7 @@ posted message carries the same info (session_id, slug, kind) as
 belt-and-suspenders: if the local state is lost or corrupted,
 ``thrds slack recover`` scans Slack filtered by session_id and rebuilds this file.
 
-Per-thread model (``specs/per-thread-model.md``)
+Per-thread model (``specs/done/per-thread-model.md``)
 ------------------------------------------------
 ::
 

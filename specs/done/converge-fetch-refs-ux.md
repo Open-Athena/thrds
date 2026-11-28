@@ -113,3 +113,9 @@ Worth flagging back to thrds: their step 4 deliberately "dropped the spec's ance
 **Ref shape, following thrds' `eca5304`.** `refs/remotes/github/remote` → `refs/remotes/github`. Same reasoning as their `refs/remotes/{staging,prod}`: the first component is the remote's *name*, and the branch component has nothing to name when there is one state per item. `github/remote` said "remote" twice; `git diff github HEAD` and `git log github` now read verbatim. Verified single-level refs under `refs/remotes/` behave fully (listed by `git branch -r`, resolve bare, auto-reflog, `@{1}`). Both older names migrate on read — and must delete-then-create, since `refs/remotes/github/remote` and `refs/remotes/github` are a git directory/file conflict.
 
 200 tests passing.
+
+## Final state (2026-11-28 triage)
+
+§1, §3, §4 and §5 landed on the ghpr side, which is now `thrds/platforms/github/` in this repo (merged at `664968f`). §6 became `specs/remotes-model.md`.
+
+Still open, moved to `specs/remotes-model.md` (unification step 1, where the two refs modules merge): §2, `ghpr diff`'s three-way classification (`thrds/platforms/github/commands/diff.py` is still a two-way diff and never reads the base). Also small: the GitHub side's gist mirror doesn't honor `THRDS_NO_PUSH` (`thrds/mirror.py` does).

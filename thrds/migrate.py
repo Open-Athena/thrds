@@ -3,7 +3,7 @@
 A legacy session has one ``.md`` holding every thread (``===``-separated), with
 thread pointers split across ``staging_threads`` and
 ``prod_threads[channel][slug]``. The per-thread layout (see
-``specs/per-thread-model.md``) has one ``NN-slug.md`` per thread and a single
+``specs/done/per-thread-model.md``) has one ``NN-slug.md`` per thread and a single
 ``threads`` map carrying each thread's staging ts, destination, and state.
 
 Migration is split into a **pure planning** step (:func:`plan_migration`, which

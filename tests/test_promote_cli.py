@@ -1,6 +1,6 @@
 """Tests for the per-thread prod verbs: `promote`, `drop`, `status`, and the archive gate.
 
-The spec's central requirement (`specs/per-thread-model.md`): prod push is
+The spec's central requirement (`specs/done/per-thread-model.md`): prod push is
 per-thread and never whole-doc, resolves its destination from the thread's own
 metadata, confirms before firing, and never auto-archives the staging channel.
 """
@@ -311,7 +311,7 @@ def test_promote_confirmed_at_prompt_posts(session, spy):
 def test_promote_computes_plan_before_posting(session, spy):
     """The real post must be preceded by a dry-run plan of the SAME promote —
     the plan is what the confirmation approves (see
-    specs/promote-shared-thread-safety.md)."""
+    specs/done/promote-shared-thread-safety.md)."""
     state = SessionState.load(session)
     state.prod_channel = 'C0D'
     state.save(session)

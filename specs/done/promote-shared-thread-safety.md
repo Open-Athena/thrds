@@ -31,3 +31,9 @@ Slack cannot re-insert messages at historical ts (server-assigned, identity == p
 2. Re-post 04 (`04-cuda-graph.md`) at thread end with a note that it's a re-post after a scripting error deleted the original (original approvals: Russell/Matt in-thread messages still stand; the reactions are gone).
 3. Post 05 (`grug-deleted`) properly — as a plain new reply.
 4. Correct `thrds.json`: `grug-deleted.state` back to `draft` until 3 lands; fix `posted_ts`/`posted_url` fields that recorded the thread root.
+
+## Final state (2026-11-28 triage)
+
+All three fixes landed: `SyncOptions.only_ids` scopes the reconcile (`thrds/core.py`, computed in `promote_thread`), our own message ids are recorded (now `RemotePointer.msg_ts`), and `promote` always prints its plan first. Tests: `tests/test_promote_foreign_thread.py`, `tests/test_promote_cli.py`. The `posted_ts`-records-the-root bug was fixed in `32c4c72`.
+
+Not built: `promote --no-finalize` (only the session / remote-level `StagingChrome.finalize_terminal` exists). The restoration runbook was an operations step, not code.

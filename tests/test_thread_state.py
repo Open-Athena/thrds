@@ -1,7 +1,7 @@
 """Tests for the per-thread state model (`ThreadEntry` / `ThreadTarget` / `SessionState.threads`).
 
 Companion to `test_state.py`, which covers the session-level fields. See
-`specs/per-thread-model.md`: destination is a property of the *thread*, not the
+`specs/done/per-thread-model.md`: destination is a property of the *thread*, not the
 session, which is what collapses the batch case (N threads, one channel) and
 the reply case (N threads, N targets) into one shape.
 """

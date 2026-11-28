@@ -63,29 +63,9 @@ Session-level `prod_channel` becomes a *default* for new threads, not the author
 
 Archiving becomes its own deliberate verb once every thread is `posted` or `dropped`.
 
-## Ready-state: reactions, and `@ThrdsBot` for anything with arguments
+## Ready-state
 
-Two complementary controls, because they're good at different things.
-
-**Reactions** carry one bit of state, out-of-band from content, so they never pollute the doc or risk leaking into prod, and a human can set them by hand:
-
-- 🔴 draft / not ready
-- 🟢 ready to push
-
-Reactions attach to the thread's **OP**. 🟢 should **arm, not fire** — the watcher resolves destination + body and asks for confirmation. An accidental tap must never publish.
-
-**Mentions** take arguments, which reactions can't:
-
-```
-@ThrdsBot push
-@ThrdsBot retarget #marin-eng
-@ThrdsBot retarget <permalink>     # rebase this draft onto another thread
-@ThrdsBot archive
-```
-
-Posted as replies in the staging thread, so the instruction itself is visible history. Support both and let people use whichever fits their habits.
-
-No hosted bot required: a `thrds slack watch` poller keeps this a CLI with no infra to run.
+Moved to `specs/reactions.md` (§3) on 2026-11-28: not built, and it's the same OP-reaction machinery as that spec.
 
 ## Staging-only chrome
 
@@ -121,3 +101,9 @@ Mechanically: replay each commit, splitting the doc into `NN-slug.md` per thread
 - Does `state` belong in `thrds.json`, or is the Slack reaction the single source of truth (with `thrds.json` a cache)? Slack-as-truth is more robust to hand edits but requires a fetch to know state.
 - Should `posted` threads keep their staging message (with a link to the prod one), or be marked and left alone? Leaning: keep and annotate — the staging thread is the trajectory.
 - Multi-channel sessions: is one PEC per *topic* right, or should a session be able to span channels freely? Today's case suggests topic, and the destinations just happen to differ.
+
+## Final state (2026-11-28 triage)
+
+Landed (`1e8f473` → `0e5b1f4`): one file per thread (`thrds/threadfile.py`), per-thread destinations (now `ThreadEntry` remote pointers, `thrds/state.py`), prod push per thread (`promote`; `push --prod` refused on per-thread sessions), `archive` gated on pending threads (plus `drop` / `reopen`), staging-only chrome with the gist and target links (a footer line rather than a `context` block), chrome edits in Slack retargeting or renaming (`pull_chrome_edits`), and `slck migrate` / `slck replay`.
+
+Open questions, as answered: posted threads keep their staging copy, annotated with a ✅ permalink (`specs/done/chrome-condense-posted.md`); `state` stays in `thrds.yml`. The ready-state section moved to `specs/reactions.md`.

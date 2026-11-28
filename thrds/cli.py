@@ -1583,7 +1583,7 @@ def _fetch_refs(
     there is no evidence of which side is ahead — "remote is ahead" reverts
     unpushed local work, "local is ahead" pushes stale content over a newer
     remote — so no base is invented (ghpr's `bootstrap_is_ambiguous`, arrived
-    at after refuting the alternatives; see specs/fetch-refs.md). The source
+    at after refuting the alternatives; see specs/done/fetch-refs.md). The source
     refs are always set: they're pure observations, safe regardless.
 
     ``write_composite=False`` previews the composite while still writing the
@@ -1928,7 +1928,7 @@ def slack_promote(channel: str | None, force: bool, dry_run: bool, thread_ts: st
     The per-thread replacement for the old `push --prod`, which fired the
     *whole doc* at one channel and then archived the staging PC — wrong when
     the session holds several drafts at different readiness, bound for
-    different places (see ``specs/per-thread-model.md``).
+    different places (see ``specs/done/per-thread-model.md``).
 
     Resolves the destination from the thread's own metadata (falling back to
     the session's `prod_channel`), prints it alongside the exact body that
@@ -1978,7 +1978,7 @@ def slack_promote(channel: str | None, force: bool, dry_run: bool, thread_ts: st
     # live thread) before anything fires. Rendering only the draft body once
     # let a promote silently edit and delete unrelated messages — the plan is
     # the thing being approved, not the prose. See
-    # specs/promote-shared-thread-safety.md.
+    # specs/done/promote-shared-thread-safety.md.
     plan = client.promote_thread(slug, thread, target, state, dry_run=True, frontmatter=parsed.frontmatter)
     err('  ---')
     err(plan.format_preview(color=sys.stderr.isatty(), prefix='  '))
@@ -2286,7 +2286,7 @@ def slack_migrate(dry_run: bool):
     """Split this session's single doc into per-thread `NN-slug.md` files.
 
     Converts a legacy one-doc-many-threads session to the per-thread model
-    (see ``specs/per-thread-model.md``): each ``=== slug`` section becomes its
+    (see ``specs/done/per-thread-model.md``): each ``=== slug`` section becomes its
     own file, and `thrds.yml` gains a `threads` map carrying each thread's
     staging ts, destination, and state. A preamble becomes ``00-preamble.md``.
 

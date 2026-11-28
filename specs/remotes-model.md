@@ -20,6 +20,18 @@ Checked against the features that looked lifecycle-specific — each is a per-re
 | frozen staged copy after promote | the non-upstream remote is no longer converged, only observed |
 | cross-thread `#slug` refs | resolved per-remote (permalinks differ per channel) |
 
+## Open (2026-11-28 triage)
+
+The sections below are this spec's history; what's left of it:
+- Unification step 1, merge the two refs modules, with `ghpr diff`'s three-way classification (below).
+- Unification step 4, merge the two gist mirrors (`thrds/platforms/github/gist.py` + `commands/pull.py`, and `thrds/mirror.py`); the GitHub side should honor `THRDS_NO_PUSH` as `mirror.py` does.
+- Unification step 5, named remotes on the GitHub side (item and gist as two remotes).
+- The target package layout (`thrds/{sync,doc,platforms/{slack,discord,bsky}}`); only `platforms/github` exists.
+- `pull -r`, `promote -r`, and `promote` as sugar for `push -u prod`.
+- Per-target prod refs: one `prod` ref still covers every thread's target.
+- Find the session by walking up from the cwd, as ghpr does (`SessionState.load` reads only `<cwd>/thrds.yml`).
+- Discord, Bluesky and Mastodon have no `fetch` / `pull`: the sync model is Slack's and GitHub's so far.
+
 ## What's already aligned
 
 `refs/remotes/<platform>/{staging,prod}` (`tracking.py`) is this structure in embryo — one tracking namespace per pseudo-remote. The composite `slack/remote` is, in remotes terms, the **upstream projection**: each thread's content as its upstream remote reports it, materialized as one tree because the session reconciles as one branch. It's an implementation detail of "pull from upstream", not a third remote; possibly worth renaming (`slack/upstream`?) once the vocabulary lands, though `remote` is currently converged with ghpr.
@@ -159,7 +171,7 @@ thrds/
 
 **Explicitly not done yet — the unification itself**, bottom-up, each step deleting one of two implementations:
 
-1. **Refs** — `ghpr/refs.py` + `thrds/tracking.py` → one module. Smallest and most converged; do it first.
+1. **Refs** — `ghpr/refs.py` + `thrds/tracking.py` → one module. Smallest and most converged; do it first. With it, `ghpr diff` gets the Slack side's three-way classification (`_diff_threads`: "changed on GitHub / changed locally / CONFLICT", a local-only change flipping the printed direction, local == remote silent), moved here from `specs/done/converge-fetch-refs-ux.md` §2.
 2. ~~**The push gate**~~ — **done 2026-08-24**, ahead of the refs merge because it was a live bug rather than a cleanup. thrds' gate self-cleared exactly as ghpr's had; the answer for a side-chain composite turned out to be a second ref (`refs/heads/base/<name>`) recording what HEAD has *incorporated*, which is the same standing question `--is-ancestor` asks without needing the composite to be an ancestor. Both adapters now refuse a second time. `specs/done/push-gate-ancestry.md`.
 3. ~~**Bootstrap ambiguity**~~ — **already converged; checked 2026-08-24, no code needed.** Both earlier claims about this were wrong: thrds does *not* "sidestep structurally", and it is not a hole in the gate. `_fetch_refs` withholds the composite when a first fetch disagrees with HEAD and names both resolutions (`slck pull -m overwrite` / `slck push`), which is `bootstrap_is_ambiguous`'s rule verb for verb; `pull -m rebase|merge` refuses without a base; and `push` proceeding with no base is the *documented* "local wins" answer, which ghpr allows for the same reason. The one thing worth pinning was the interaction with the new base ref — a disagreeing observation must not become the gate's base — now covered in `test_ambiguous_bootstrap_withholds_the_composite`.
 4. **The gist mirror** — `ghpr/gist.py`'s mirror half + `thrds/mirror.py`.

@@ -18,6 +18,32 @@ thrds currently treats reactions only as a repost guard (`SenderChangePolicy.los
 
 Foreign reactions can't be pushed, but they're often the *record* — the 2026-08-19 promote incident permanently lost the 👍 approvals on a deleted message; a mirror would have preserved at least the evidence. On `pull`, store observed reactions (name → count, and user list for small counts) per posted message in `thrds.json` (not in the content files — they're not desired state). Surface them in `status` output.
 
+## 3. Ready-state on the OP: reactions, and `@ThrdsBot` for anything with arguments
+
+Moved from `specs/done/per-thread-model.md` (2026-11-28); not built. It needs the same `reactions:write` scope and OP-reaction reads as §1.
+
+Two complementary controls, because they're good at different things.
+
+**Reactions** carry one bit of state, out-of-band from content, so they never pollute the doc or risk leaking into prod, and a human can set them by hand:
+
+- 🔴 draft / not ready
+- 🟢 ready to push
+
+Reactions attach to the thread's **OP**. 🟢 should **arm, not fire** — the watcher resolves destination + body and asks for confirmation. An accidental tap must never publish.
+
+**Mentions** take arguments, which reactions can't:
+
+```
+@ThrdsBot push
+@ThrdsBot retarget #marin-eng
+@ThrdsBot retarget <permalink>     # rebase this draft onto another thread
+@ThrdsBot archive
+```
+
+Posted as replies in the staging thread, so the instruction itself is visible history. Support both and let people use whichever fits their habits.
+
+No hosted bot required: a `thrds slack watch` poller keeps this a CLI with no infra to run.
+
 ## Non-goals
 
 - Re-creating foreign reactions after a repost (impossible).

@@ -7,7 +7,7 @@ two-digit ordering prefix and the thread's slug::
     02-cw-summary.md
     03-cw-mpu.md
 
-Rationale (see ``specs/per-thread-model.md``): with N threads in one doc, the
+Rationale (see ``specs/done/per-thread-model.md``): with N threads in one doc, the
 gist's git history interleaves unrelated drafts, so a commit reads as "the doc
 changed" rather than "*this message* went v2→v3". Since the gist history is the
 artifact these sessions are collected for, that conflation is the costly part.

@@ -93,10 +93,10 @@ The gist is a **read replica** of the local clone. `push`/`pull` operations sync
 
 ### Recent Changes
 
-**Ref namespace + honest bootstrap** (latest; from `specs/converge-fetch-refs-ux.md`, written by the thrds session after it built the same design):
+**Ref namespace + honest bootstrap** (latest; from `specs/done/converge-fetch-refs-ux.md`, written by the thrds session after it built the same design):
 - `refs/ghpr/remote` → `refs/remotes/github`, so git auto-enables a reflog for it (verified: 0 vs 2 reflog entries); also gets `git branch -r` listing and bare `github` shorthand. Legacy names migrate on read. No `[remote "github"]` config section — a URL-less remote would break `git fetch --all`.
 - Bootstrap no longer guesses. `ensure_remote_ref` (which set the base to HEAD with a warning) is gone; `resolve_base()` + `bootstrap_is_ambiguous()` adopt HEAD only when the fetch confirms it matches GitHub, and otherwise refuse. Guessing "GitHub is ahead" reverted unpushed local work and pushed the reversion — the original bug, on the one path where the base was a guess; guessing "local is ahead" would push a stale HEAD over a newer remote.
-- Still open from that spec: three-way classification in `ghpr diff` (§2) and a `push` upstream gate (§3).
+- Still open from that spec: three-way classification in `ghpr diff` (§2), now tracked in `specs/remotes-model.md` (unification step 1). The `push` upstream gate (§3) landed: `_gate_upstream` in `commands/push.py`.
 
 **`refs/ghpr/remote` + `ghpr fetch`; `pull` reconciles instead of clobbering**:
 - `refs.py`: `read_remote_ref` / `set_remote_ref` over the ref

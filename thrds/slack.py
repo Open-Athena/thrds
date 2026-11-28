@@ -2274,7 +2274,7 @@ class SlackClient:
         """Post one thread to its own target. Never touches any other thread.
 
         The per-thread replacement for ``sync_doc_prod``'s whole-doc push (see
-        ``specs/per-thread-model.md``). Two shapes, decided by the target:
+        ``specs/done/per-thread-model.md``). Two shapes, decided by the target:
 
         - ``target.thread_ts is None`` → the thread's messages become a new
           top-level message plus its replies.
@@ -2286,7 +2286,7 @@ class SlackClient:
           other slugs or manual posts via ``only_ts``. A first promote has an
           empty scope and is therefore strictly append-only. (Converging the
           whole thread here once edited/deleted three unrelated posts — see
-          ``specs/promote-shared-thread-safety.md``.)
+          ``specs/done/promote-shared-thread-safety.md``.)
 
         Deliberately does **not** archive the staging channel: other threads in
         the session are still live drafts. Archiving is its own verb, gated on

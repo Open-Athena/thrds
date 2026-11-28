@@ -2,7 +2,7 @@
 
 One file is one thread: `+++` still separates replies within it, `===` is
 retired. The slug comes from the filename, not from an in-file marker.
-See `specs/per-thread-model.md`.
+See `specs/done/per-thread-model.md`.
 """
 from __future__ import annotations
 

@@ -180,3 +180,11 @@ Verified live in a throwaway copy of `cw-quickwins`: bootstrap confirmed silentl
 
 [`ghpr`]: https://github.com/runsascoded/ghpr
 [`d119a07`]: https://github.com/runsascoded/ghpr/commit/d119a07
+
+## Final state (2026-11-28 triage)
+
+All five phases landed, then were reshaped by later work:
+- Ref names: `refs/remotes/{staging,prod}` plus `refs/heads/upstream` (`thrds/tracking.py`), settled in `specs/remotes-model.md`, not the `refs/remotes/slack/*` names above.
+- "The ancestor check is dropped" no longer holds: the gate's base is now `refs/heads/base/<name>`, what HEAD has incorporated (`specs/done/push-gate-ancestry.md`), after the content-level gate was found to self-clear.
+
+Not built: the per-action `DELETE` pre-flight re-read (deferred above), and `slck push <slug>...` for a deliberately partial push (`slack_push` takes only the doc). Either gets its own spec if it's wanted.
